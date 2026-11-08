@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -71,6 +72,9 @@ data class VacuumUiState(
     val rehomeSteps: List<RehomeClient.StepLog> = emptyList(),
     val rehomeInProgress: Boolean = false,
     val rehomeStatusBanner: String? = null,
+    val savedWifiSsid: String = "Robots",
+    val savedWifiPassword: String = "",
+    val lastDiscoveredRobotLanIp: String? = null,
     val wireTraces: List<LocalVacuumServer.WireTraceEntry> = emptyList(),
     val lastActionBanner: String = "Listening on :8080 (HTTP) & :8081 (TCP) — waiting for Proscenic M7 to connect",
     // ColorOS 17 Living Flow Design accessibility & visual preferences
@@ -81,6 +85,11 @@ data class VacuumUiState(
 )
 
 class VacuumViewModel : ViewModel() {
+
+    private val prefsFile: File = File(
+        System.getProperty("java.io.tmpdir") ?: "/tmp",
+        "proscenic_m7_pairing_prefs.json"
+    )
 
     private val _uiState = MutableStateFlow(VacuumUiState())
     val uiState: StateFlow<VacuumUiState> = _uiState.asStateFlow()
@@ -101,6 +110,42 @@ class VacuumViewModel : ViewModel() {
         _uiState.update { it.copy(highContrast = enabled) }
     }
 
+    fun updateSavedWifiCredentials(ssid: String, password: String) {
+        _uiState.update { it.copy(savedWifiSsid = ssid, savedWifiPassword = password) }
+        persistPairingPrefs(ssid, password, _uiState.value.lastDiscoveredRobotLanIp)
+    }
+
+    private fun loadPairingPrefs() {
+        runCatching {
+            if (prefsFile.exists()) {
+                val json = JSONObject(prefsFile.readText(Charsets.UTF_8))
+                val ssid = json.optString("wifiSsid", "Robots").ifBlank { "Robots" }
+                val pwd = json.optString("wifiPassword", "")
+                val lastIp = json.optString("lastRobotLanIp", "").ifBlank { null }
+                _uiState.update {
+                    it.copy(
+                        savedWifiSsid = ssid,
+                        savedWifiPassword = pwd,
+                        lastDiscoveredRobotLanIp = lastIp
+                    )
+                }
+            }
+        }
+    }
+
+    private fun persistPairingPrefs(ssid: String, password: String, lastRobotIp: String?) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val json = JSONObject().apply {
+                    put("wifiSsid", ssid)
+                    put("wifiPassword", password)
+                    if (!lastRobotIp.isNullOrBlank()) put("lastRobotLanIp", lastRobotIp)
+                }
+                prefsFile.writeText(json.toString(), Charsets.UTF_8)
+            }
+        }
+    }
+
     private val localServer = LocalVacuumServer(
         httpPort = 8080,
         gatewayPort = 8081,
@@ -109,7 +154,11 @@ class VacuumViewModel : ViewModel() {
                 it.copy(
                     status = status,
                     robotSocketConnected = true,
-                    lastActionBanner = "Live telemetry from ${status.sn} (${status.modeDisplayLabel}, ${status.battery}%)"
+                    lastActionBanner = if (status.isSleepOrShutdown) {
+                        "Robot is in '${status.mode}' sleep mode (${status.battery}%). Tap 'Wake Robot' or press physical Power button on vacuum to control."
+                    } else {
+                        "Live telemetry from ${status.sn} (${status.modeDisplayLabel}, ${status.battery}%)"
+                    }
                 )
             }
         },
@@ -147,6 +196,20 @@ class VacuumViewModel : ViewModel() {
                 )
             }
         },
+        onCommandAck = { infoType, message, _ ->
+            _uiState.update { state ->
+                val banner = if (message.equals("fail", ignoreCase = true)) {
+                    if (state.status.isSleepOrShutdown) {
+                        "⚠ Robot rejected command $infoType ('fail') — Robot is in '${state.status.mode}' sleep mode! Press Power button on vacuum or place on dock to wake."
+                    } else {
+                        "⚠ Robot returned 'fail' for command $infoType (mode=${state.status.mode})"
+                    }
+                } else {
+                    "✓ Robot ACK $infoType: $message (${state.status.modeDisplayLabel})"
+                }
+                state.copy(lastActionBanner = banner)
+            }
+        },
         onWireTrace = { entry ->
             _uiState.update { state ->
                 state.copy(wireTraces = (listOf(entry) + state.wireTraces).take(100))
@@ -158,6 +221,7 @@ class VacuumViewModel : ViewModel() {
     )
 
     init {
+        loadPairingPrefs()
         startEmbeddedServer()
         startLanIpMonitor()
     }
@@ -187,7 +251,17 @@ class VacuumViewModel : ViewModel() {
         }
         viewModelScope.launch {
             localServer.connectedRobotAddress.collect { addr ->
-                _uiState.update { it.copy(connectedRobotAddress = addr) }
+                val ipOnly = addr?.substringBefore(':')?.takeIf { it.isNotBlank() }
+                if (ipOnly != null) {
+                    val s = _uiState.value
+                    persistPairingPrefs(s.savedWifiSsid, s.savedWifiPassword, ipOnly)
+                }
+                _uiState.update {
+                    it.copy(
+                        connectedRobotAddress = addr,
+                        lastDiscoveredRobotLanIp = ipOnly ?: it.lastDiscoveredRobotLanIp
+                    )
+                }
             }
         }
         viewModelScope.launch {
@@ -203,18 +277,55 @@ class VacuumViewModel : ViewModel() {
     }
 
     /**
-     * Periodically refreshes the phone's local Wi-Fi IP so when the user switches from the
-     * `Proscenic-*` SoftAP (`192.168.78.x`) back to home Wi-Fi (`192.168.1.x`), the displayed
-     * server IP updates immediately.
+     * Periodically refreshes the phone's local Wi-Fi IP and, when on Home Wi-Fi and not yet
+     * connected to the robot, automatically probes LAN UDP 7913 to re-point the robot if the
+     * phone's DHCP IP changed (e.g. from `192.168.1.110` to `192.168.1.165`).
      */
     private fun startLanIpMonitor() {
         viewModelScope.launch(Dispatchers.IO) {
+            var lastAutoProbedIp = ""
             while (isActive) {
                 val currentIp = LocalVacuumServer.getLocalLanIpAddress()
                 if (currentIp != _uiState.value.localLanIp) {
                     _uiState.update { it.copy(localLanIp = currentIp) }
                 }
+                // Auto-repoint once per Home LAN IP if disconnected
+                if (!currentIp.startsWith("192.168.78.") &&
+                    currentIp != "0.0.0.0" &&
+                    !_uiState.value.robotSocketConnected &&
+                    !_uiState.value.rehomeInProgress &&
+                    currentIp != lastAutoProbedIp
+                ) {
+                    lastAutoProbedIp = currentIp
+                    delay(2000L)
+                    if (!_uiState.value.robotSocketConnected && !_uiState.value.rehomeInProgress) {
+                        silentAutoRepointOnLan(currentIp)
+                    }
+                }
                 delay(3000L)
+            }
+        }
+    }
+
+    private suspend fun silentAutoRepointOnLan(serverHostIp: String) {
+        val state = _uiState.value
+        val client = RehomeClient()
+        val result = client.repointRobotOnLan(
+            serverHostIp = serverHostIp,
+            httpPort = 8080,
+            gatewayPort = 8081,
+            wifiSsid = state.savedWifiSsid,
+            wifiPassword = state.savedWifiPassword,
+            knownRobotIp = state.lastDiscoveredRobotLanIp
+        )
+        if (result.success) {
+            _uiState.update {
+                it.copy(
+                    lastDiscoveredRobotLanIp = result.discoveredRobotIp ?: it.lastDiscoveredRobotLanIp,
+                    rehomeSteps = result.steps,
+                    rehomeStatusBanner = "Auto-discovered robot at ${result.discoveredRobotIp}:7913 (SN=${result.robotSerialNumber}) and updated target IP to $serverHostIp:8081!",
+                    lastActionBanner = "Auto-repointed robot at ${result.discoveredRobotIp} to $serverHostIp:8081 over LAN UDP 7913!"
+                )
             }
         }
     }
@@ -276,6 +387,25 @@ class VacuumViewModel : ViewModel() {
     // Real Vacuum Controls (Channel B 21005, 21017, 21012, 21022, 21024, 21020)
     // =========================================================================
 
+    /**
+     * Attempts to wake the vacuum from `shutdown` / `dormant` standby over Channel B
+     * by sending remote-control exit (`4000`), clean/pause toggle (`3002`), and status request (`20001`).
+     */
+    fun wakeRobotFromStandby() {
+        localServer.sendFramesToRobot(
+            listOf(
+                ProscenicProtocol.buildRemoteControl(4000),
+                ProscenicProtocol.buildRemoteControl(3002),
+                ProscenicProtocol.buildRequestStatus()
+            )
+        )
+        _uiState.update {
+            it.copy(
+                lastActionBanner = "Sent Wake Sequence (21020 ctrlCode=4000 & 3002). Note: If robot is in deep 'shutdown' off dock, press its physical Power button once."
+            )
+        }
+    }
+
     fun startWholeHomeClean(deepClean: Boolean = false) {
         val state = _uiState.value
         val frame = if (deepClean) {
@@ -283,15 +413,26 @@ class VacuumViewModel : ViewModel() {
         } else {
             ProscenicProtocol.buildStartSmartClean(yShapedMop = state.yShapedMopEnabled)
         }
-        dispatchSingleFrame(
-            frame,
-            if (deepClean) "Sent Deep Whole-Home Clean (21005 depthTotalClean)" else "Sent Whole-Home Clean (21005 smartClean)"
-        )
+        if (state.status.isSleepOrShutdown) {
+            // Send wake pulse before 21005 start command
+            localServer.sendFramesToRobot(
+                listOf(
+                    ProscenicProtocol.buildRemoteControl(4000),
+                    frame,
+                    ProscenicProtocol.buildRequestStatus()
+                )
+            )
+        } else {
+            dispatchSingleFrame(
+                frame,
+                if (deepClean) "Sent Deep Whole-Home Clean (21005 depthTotalClean)" else "Sent Whole-Home Clean (21005 smartClean)"
+            )
+        }
     }
 
     fun pauseOrResumeCleaning() {
         val currentMode = _uiState.value.status.mode
-        if (currentMode.equals("pause", ignoreCase = true)) {
+        if (currentMode.equals("pause", ignoreCase = true) || currentMode.equals("findchargerpause", ignoreCase = true)) {
             val frame = ProscenicProtocol.buildPauseContinueStop("continue")
             dispatchSingleFrame(frame, "Sent Resume Cleaning (21017 continue)")
         } else {
@@ -344,10 +485,20 @@ class VacuumViewModel : ViewModel() {
 
     /**
      * Manual D-pad remote control (`infoType: 21020`, `ctrlCode` 3005..3008, 4001, 4000).
+     * Per `FUNC_COMMANDS.md` §2.3 & `FIELD_NOTES.md`, each movement frame has a 400ms hardware
+     * speed timeout (`SetSpeed(..., 300, 10000)`), so directional taps send a 4-frame burst over 750ms.
      */
     fun sendRemoteControlStep(ctrlCode: Int) {
         val frame = ProscenicProtocol.buildRemoteControl(ctrlCode)
         dispatchSingleFrame(frame, "Sent Manual Remote ctrlCode=$ctrlCode (21020)")
+        if (ctrlCode in setOf(3005, 3006, 3007, 3008)) {
+            viewModelScope.launch(Dispatchers.IO) {
+                repeat(3) {
+                    delay(240L)
+                    localServer.sendFrameToRobot(ProscenicProtocol.buildRemoteControl(ctrlCode))
+                }
+            }
+        }
     }
 
     // =========================================================================
@@ -397,10 +548,14 @@ class VacuumViewModel : ViewModel() {
 
     fun resetRoomSegmentation() {
         val state = _uiState.value
-        val currentMap = state.map ?: return
-        val frame = ProscenicProtocol.buildRoomResetSegmentation(currentMap.autoAreaId)
-        dispatchSingleFrame(frame, "Sent Reset Room Segmentation (21030 reset)")
+        val autoAreaId = state.map?.autoAreaId ?: 0
+        val frame = ProscenicProtocol.buildRoomResetSegmentation(autoAreaId)
+        dispatchSingleFrame(frame, "Sent Auto-Segment Rooms (21030 reset) + requesting updated 20002 map...")
         _uiState.update { it.copy(mergeFirstRoomLabel = null, selectedRoomLabels = emptySet()) }
+        viewModelScope.launch(Dispatchers.IO) {
+            delay(1400L)
+            localServer.sendFrameToRobot(ProscenicProtocol.buildRequestMapUploadNow())
+        }
     }
 
     fun addDrawnZone(p1Mm: PointMm, p2Mm: PointMm, customName: String? = null) {
@@ -465,8 +620,15 @@ class VacuumViewModel : ViewModel() {
             return
         }
 
+        // Convert selected rooms into inline `extraAreas` bounding boxes as well (`FIELD_NOTES.md`),
+        // because 0.7.1/1241 firmware honours `extraAreas` (`mode:"area"`) even when `segmentId` is ignored.
+        val roomExtraRegions = roomIds.mapNotNull { label ->
+            state.map?.roomBoundingBoxRegion(label, state.status.suction)
+        }
+
         val frames = ProscenicProtocol.buildZoneOrRoomCleanSequence(
             storedZoneIds = zoneIds,
+            extraAreas = roomExtraRegions,
             segmentRoomLabels = roomIds,
             includeStoredForbiddenZones = true
         )
@@ -551,8 +713,58 @@ class VacuumViewModel : ViewModel() {
     }
 
     // =========================================================================
-    // SoftAP UDP 7913 Re-homing Wizard (100% Real Hardware Only)
+    // LAN UDP 7913 Re-Pointing & SoftAP UDP 7913 Re-homing Wizard
     // =========================================================================
+
+    /**
+     * Scans the Home Wi-Fi `/24` LAN for UDP 7913 and updates the robot's target server IP
+     * (e.g. when the phone's DHCP IP changes from `192.168.1.110` to `192.168.1.165`)
+     * without requiring the user to put the robot back into SoftAP mode!
+     */
+    fun reconnectRobotOnLanNow(
+        serverHostIp: String = _uiState.value.localLanIp,
+        wifiSsid: String = _uiState.value.savedWifiSsid,
+        wifiPassword: String = _uiState.value.savedWifiPassword
+    ) {
+        if (_uiState.value.rehomeInProgress) return
+        _uiState.update {
+            it.copy(
+                rehomeInProgress = true,
+                rehomeSteps = emptyList(),
+                rehomeStatusBanner = "Scanning home Wi-Fi LAN for vacuum on UDP 7913 to point at $serverHostIp:8081..."
+            )
+        }
+
+        viewModelScope.launch {
+            val client = RehomeClient()
+            val result = client.repointRobotOnLan(
+                serverHostIp = serverHostIp,
+                httpPort = 8080,
+                gatewayPort = 8081,
+                wifiSsid = wifiSsid,
+                wifiPassword = wifiPassword,
+                knownRobotIp = _uiState.value.lastDiscoveredRobotLanIp,
+                onStepProgress = { stepLog ->
+                    _uiState.update { s -> s.copy(rehomeSteps = s.rehomeSteps + stepLog) }
+                }
+            )
+            if (!result.discoveredRobotIp.isNullOrBlank()) {
+                persistPairingPrefs(wifiSsid, wifiPassword, result.discoveredRobotIp)
+            }
+            _uiState.update { s ->
+                s.copy(
+                    rehomeInProgress = false,
+                    rehomeSteps = result.steps,
+                    lastDiscoveredRobotLanIp = result.discoveredRobotIp ?: s.lastDiscoveredRobotLanIp,
+                    rehomeStatusBanner = if (result.success) {
+                        "Found robot on Home Wi-Fi at ${result.discoveredRobotIp}:7913 (SN=${result.robotSerialNumber}) and updated its target IP to $serverHostIp:8081! Waiting a few seconds for TCP connection..."
+                    } else {
+                        "Error: ${result.errorMessage}"
+                    }
+                )
+            }
+        }
+    }
 
     fun runRehomeWizard(
         robotApIp: String,
@@ -562,11 +774,14 @@ class VacuumViewModel : ViewModel() {
         userId: String
     ) {
         if (_uiState.value.rehomeInProgress) return
+        if (wifiSsid.isNotBlank() && !wifiSsid.startsWith("Proscenic-", ignoreCase = true)) {
+            updateSavedWifiCredentials(wifiSsid.trim(), wifiPassword)
+        }
         _uiState.update {
             it.copy(
                 rehomeInProgress = true,
                 rehomeSteps = emptyList(),
-                rehomeStatusBanner = "Contacting vacuum on $robotApIp:7913..."
+                rehomeStatusBanner = "Contacting vacuum on $robotApIp:7913 (and scanning LAN)..."
             )
         }
 
@@ -583,12 +798,16 @@ class VacuumViewModel : ViewModel() {
                     _uiState.update { s -> s.copy(rehomeSteps = s.rehomeSteps + stepLog) }
                 }
             )
+            if (!result.discoveredRobotIp.isNullOrBlank() && result.discoveredRobotIp != "192.168.78.1") {
+                persistPairingPrefs(wifiSsid, wifiPassword, result.discoveredRobotIp)
+            }
             _uiState.update { s ->
                 s.copy(
                     rehomeInProgress = false,
                     rehomeSteps = result.steps,
+                    lastDiscoveredRobotLanIp = result.discoveredRobotIp?.takeIf { it != "192.168.78.1" } ?: s.lastDiscoveredRobotLanIp,
                     rehomeStatusBanner = if (result.success) {
-                        "Re-home succeeded (SN=${result.robotSerialNumber}, UDP port=${result.discoveredPort}). Make sure your phone is on '$wifiSsid' ($serverHostIp) — the vacuum will now connect to $serverHostIp:8081!"
+                        "Re-home succeeded (SN=${result.robotSerialNumber}, IP=${result.discoveredRobotIp}:${result.discoveredPort}). Make sure your phone is on '$wifiSsid' ($serverHostIp) — the vacuum will now connect to $serverHostIp:8081!"
                     } else {
                         "Error: ${result.errorMessage}"
                     }
@@ -645,6 +864,7 @@ class VacuumViewModel : ViewModel() {
                 "locate" -> locateRobotBeep()
                 "collect_dust", "empty_bin" -> collectDustNow()
                 "spot_clean", "clean_spot" -> spotCleanHere()
+                "wake" -> wakeRobotFromStandby()
                 "set_fan_speed" -> {
                     val speed = payload.optString("fan_speed", "auto")
                     setSuctionLevel(SuctionLevel.fromWire(speed))

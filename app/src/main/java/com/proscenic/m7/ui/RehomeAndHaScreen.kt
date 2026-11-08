@@ -98,8 +98,16 @@ fun RehomeAndHaScreen(
         }
     }
 
-    var wifiSsid by remember { mutableStateOf("") }
-    var wifiPassword by remember { mutableStateOf("") }
+    var wifiSsid by remember { mutableStateOf(uiState.savedWifiSsid) }
+    var wifiPassword by remember { mutableStateOf(uiState.savedWifiPassword) }
+    LaunchedEffect(uiState.savedWifiSsid, uiState.savedWifiPassword) {
+        if (wifiSsid.isBlank() && uiState.savedWifiSsid.isNotBlank()) {
+            wifiSsid = uiState.savedWifiSsid
+        }
+        if (wifiPassword.isBlank() && uiState.savedWifiPassword.isNotBlank()) {
+            wifiPassword = uiState.savedWifiPassword
+        }
+    }
     var userId by remember { mutableStateOf("local_user") }
     var copiedToast by remember { mutableStateOf(false) }
 
@@ -168,7 +176,7 @@ fun RehomeAndHaScreen(
                         color = colors.textPrimary
                     )
                     Text(
-                        text = "Verify Physical Robot Connection • SoftAP UDP 7913 Re-homing • Home Assistant",
+                        text = "Verify Physical Robot Connection • LAN & SoftAP UDP 7913 Re-homing • Home Assistant",
                         style = MaterialTheme.typography.labelSmall,
                         color = colors.textSecondary
                     )
@@ -186,7 +194,7 @@ fun RehomeAndHaScreen(
                     subtitle = if (uiState.robotSocketConnected) {
                         "Your physical Proscenic vacuum is connected to this phone's TCP :8081 Push Gateway."
                     } else {
-                        "Embedded server is running on HTTP :8080 and TCP :8081, waiting for the vacuum to join your home Wi-Fi and connect."
+                        "Did your phone's Wi-Fi IP change (e.g. .110 -> ${uiState.localLanIp}) while the robot is already on your home Wi-Fi? Tap 'Scan & Re-Point Robot on Home Wi-Fi' below!"
                     },
                     isActive = uiState.robotSocketConnected
                 ) {
@@ -210,8 +218,13 @@ fun RehomeAndHaScreen(
                         )
                         DiagnosticRow(
                             label = "Robot LAN IP : Port",
-                            value = uiState.connectedRobotAddress ?: "Not connected",
+                            value = uiState.connectedRobotAddress ?: (uiState.lastDiscoveredRobotLanIp ?: "Not connected"),
                             valueColor = colors.accentCyan
+                        )
+                        DiagnosticRow(
+                            label = "Robot Firmware Mode",
+                            value = if (uiState.robotSocketConnected) "${uiState.status.modeDisplayLabel} (${uiState.status.mode})" else "Offline",
+                            valueColor = if (uiState.status.isSleepOrShutdown) colors.warning else colors.textPrimary
                         )
                         DiagnosticRow(
                             label = "Live Heartbeats (21006)",
@@ -226,6 +239,27 @@ fun RehomeAndHaScreen(
                                 "${uiState.localLanIp} (Home Wi-Fi)"
                             },
                             valueColor = if (onRobotSoftAp) colors.warning else colors.accentCyan
+                        )
+                    }
+
+                    if (!uiState.robotSocketConnected && !onRobotSoftAp) {
+                        LivingFlowPillButton(
+                            text = if (uiState.rehomeInProgress) {
+                                "Scanning Home LAN on UDP 7913..."
+                            } else {
+                                "Scan & Re-Point Robot on Home Wi-Fi (No SoftAP Needed)"
+                            },
+                            icon = Icons.Default.Wifi,
+                            variant = FluidButtonVariant.PRIMARY,
+                            enabled = !uiState.rehomeInProgress,
+                            onClick = {
+                                viewModel.reconnectRobotOnLanNow(
+                                    serverHostIp = serverHostIp,
+                                    wifiSsid = wifiSsid,
+                                    wifiPassword = wifiPassword
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
 
@@ -279,13 +313,12 @@ fun RehomeAndHaScreen(
                 }
             }
 
-            // 3. SoftAP UDP 7913 Re-Homing Wizard
+            // 3. SoftAP & LAN UDP 7913 Re-Homing Wizard
             item {
                 InsetGroupedCalmCard(
-                    title = "SoftAP UDP 7913 Re-Homing Wizard",
-                    subtitle = "Step 1: On Home Wi-Fi, verify 'Phone Home Wi-Fi IP' below matches your phone's IP (e.g. 192.168.1.110).\n" +
-                        "Step 2: Hold Power + Home on the robot for 5s until it says 'Connecting to network', then connect your phone's Wi-Fi to 'Proscenic-7190...'.\n" +
-                        "Step 3: Enter your HOME 2.4GHz router Wi-Fi name & password below and tap 'Re-Home Vacuum'."
+                    title = "UDP 7913 Re-Homing Wizard (SoftAP or Home LAN)",
+                    subtitle = "• If the robot is ALREADY on your Home Wi-Fi ('Robots') and your phone's IP changed to $serverHostIp, just enter your Wi-Fi password (or tap 'Scan & Re-Point Robot on Home Wi-Fi' above) — no need to hold Power+Home!\n" +
+                        "• For fresh SoftAP pairing: Hold Power + Home on the robot for 5s, connect phone Wi-Fi to 'Proscenic-7190...', and tap 'Re-Home Vacuum Over UDP 7913'."
                 ) {
                     // Explicit guardrail banner so user never enters Proscenic-* as the home router SSID
                     Row(
@@ -304,7 +337,7 @@ fun RehomeAndHaScreen(
                             modifier = Modifier.size(20.dp)
                         )
                         Text(
-                            text = "IMPORTANT: In 'Your Home 2.4GHz Wi-Fi SSID', type your home router's Wi-Fi name — do NOT type 'Proscenic-7190...'!",
+                            text = "IMPORTANT: In 'Your Home 2.4GHz Wi-Fi SSID', keep your home router's Wi-Fi name (e.g. 'Robots') — do NOT type 'Proscenic-7190...'!",
                             style = MaterialTheme.typography.labelSmall,
                             color = colors.textPrimary,
                             fontWeight = FontWeight.SemiBold
@@ -315,7 +348,7 @@ fun RehomeAndHaScreen(
                         OutlinedTextField(
                             value = robotApIp,
                             onValueChange = { robotApIp = it },
-                            label = { Text("Robot SoftAP IP") },
+                            label = { Text("Robot SoftAP / LAN IP") },
                             singleLine = true,
                             shape = RoundedCornerShape(tokens.radii.md),
                             modifier = Modifier.weight(1f)
@@ -333,16 +366,22 @@ fun RehomeAndHaScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         OutlinedTextField(
                             value = wifiSsid,
-                            onValueChange = { wifiSsid = it },
+                            onValueChange = {
+                                wifiSsid = it
+                                viewModel.updateSavedWifiCredentials(it, wifiPassword)
+                            },
                             label = { Text("Your Home 2.4GHz Wi-Fi SSID") },
-                            placeholder = { Text("e.g. MyHomeRouter_2.4G") },
+                            placeholder = { Text("e.g. Robots") },
                             singleLine = true,
                             shape = RoundedCornerShape(tokens.radii.md),
                             modifier = Modifier.weight(1f)
                         )
                         OutlinedTextField(
                             value = wifiPassword,
-                            onValueChange = { wifiPassword = it },
+                            onValueChange = {
+                                wifiPassword = it
+                                viewModel.updateSavedWifiCredentials(wifiSsid, it)
+                            },
                             label = { Text("Home Wi-Fi Password") },
                             singleLine = true,
                             shape = RoundedCornerShape(tokens.radii.md),

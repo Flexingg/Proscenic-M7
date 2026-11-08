@@ -182,4 +182,35 @@ class ProscenicProtocolTest {
         assertFalse(badResult.success)
         assertTrue(badResult.errorMessage?.contains("HOME 2.4GHz router Wi-Fi SSID") == true)
     }
+
+    @Test
+    fun `roomBoundingBoxRegion creates inline extraAreas rectangle for 0_7_1 firmware compatibility and detects shutdown sleep state`() {
+        val width = 40
+        val height = 40
+        val cells = ByteArray(width * height) { idx ->
+            val col = idx % width
+            val row = idx / width
+            if (col in 10..20 && row in 12..24) 2.toByte() else 0x7F.toByte()
+        }
+        val map = VacuumMap(
+            sn = "LSLDR00C019707U",
+            mapId = 100L,
+            autoAreaId = 0,
+            pathId = 1L,
+            width = width,
+            height = height,
+            xMin = -1.0f,
+            yMin = -1.0f,
+            cells = cells
+        )
+        val region = map.roomBoundingBoxRegion(2, SuctionLevel.STRONG)
+        assertTrue(region != null)
+        assertEquals(102, region!!.id)
+        assertEquals("area", region.safeMode)
+        assertEquals(4, region.verticesMm.size)
+
+        val shutdownStatus = VacuumStatus(sn = "LSLDR00C019707U", mode = "shutdown", isOnline = true)
+        assertTrue(shutdownStatus.isSleepOrShutdown)
+        assertEquals("Sleep Mode (shutdown)", shutdownStatus.modeDisplayLabel)
+    }
 }

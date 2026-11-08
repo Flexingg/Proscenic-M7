@@ -61,22 +61,27 @@ data class VacuumStatus(
     val errorCode: Int
         get() = errorState.firstOrNull { it != 0 } ?: 0
 
+    val isSleepOrShutdown: Boolean
+        get() = mode.equals("shutdown", ignoreCase = true) || mode.equals("dormant", ignoreCase = true)
+
     val modeDisplayLabel: String
         get() = when {
             !isOnline || mode.equals("offline", ignoreCase = true) -> "Offline (Waiting for Robot)"
             mode.equals("sweep", ignoreCase = true) -> when (subMode.lowercase()) {
                 "depth", "depthtotalclean" -> "Deep Cleaning (2x)"
-                "appointclean" -> "Room / Zone Clean"
+                "appointclean", "area", "smart" -> "Room / Zone Clean"
                 "point", "curpoint" -> "Spot Cleaning"
                 else -> "Smart Cleaning"
             }
-            mode.equals("pause", ignoreCase = true) -> "Paused"
+            mode.equals("pause", ignoreCase = true) || mode.equals("findchargerpause", ignoreCase = true) -> "Paused"
             mode.equals("backcharge", ignoreCase = true) -> "Returning to Dock"
             mode.equals("charge", ignoreCase = true) -> "Charging"
-            mode.equals("fullcharge", ignoreCase = true) -> "Fully Charged"
+            mode.equals("fullcharge", ignoreCase = true) -> "Docked (100%)"
             mode.equals("rfctrl", ignoreCase = true) -> "Manual Remote"
             mode.equals("dustcenterworking", ignoreCase = true) -> "Emptying Dustbin"
-            else -> "Standby (${mode})"
+            mode.equals("idle", ignoreCase = true) -> "Ready (Idle)"
+            mode.equals("shutdown", ignoreCase = true) || mode.equals("dormant", ignoreCase = true) -> "Sleep Mode ($mode)"
+            else -> "Standby ($mode)"
         }
 }
 
@@ -295,6 +300,44 @@ data class VacuumMap(
     fun cellAt(col: Int, row: Int): Int {
         if (col !in 0 until width || row !in 0 until height) return 0x7F
         return cells[row * width + col].toInt() and 0xFF
+    }
+
+    /**
+     * Computes an axis-aligned rectangular `MapRegion` covering all pixels with [roomLabel].
+     * Used alongside `segmentId` in `21023` because `0.7.1/1241` firmware honours `extraAreas` (`mode:"area"`)
+     * even when `segmentId` is ignored (`FIELD_NOTES.md` §"Inline extraAreas and point mode").
+     */
+    fun roomBoundingBoxRegion(
+        roomLabel: Int,
+        suction: SuctionLevel = SuctionLevel.AUTO
+    ): MapRegion? {
+        var minCol = Int.MAX_VALUE
+        var maxCol = Int.MIN_VALUE
+        var minRow = Int.MAX_VALUE
+        var maxRow = Int.MIN_VALUE
+        for (row in 0 until height) {
+            val rowOffset = row * width
+            for (col in 0 until width) {
+                val u = cells[rowOffset + col].toInt() and 0xFF
+                if (u == roomLabel) {
+                    if (col < minCol) minCol = col
+                    if (col > maxCol) maxCol = col
+                    if (row < minRow) minRow = row
+                    if (row > maxRow) maxRow = row
+                }
+            }
+        }
+        if (minCol > maxCol || minRow > maxRow) return null
+        val p1 = cellToWorldMm(minCol.toFloat(), minRow.toFloat())
+        val p2 = cellToWorldMm(maxCol.toFloat(), maxRow.toFloat())
+        return MapRegion.createRectangle(
+            id = 100 + roomLabel,
+            name = "Room_$roomLabel",
+            kind = ZoneKind.CLEAN_NORMAL,
+            p1 = p1,
+            p2 = p2,
+            suction = suction
+        )
     }
 
     fun cellToWorldMm(col: Float, row: Float): PointMm =

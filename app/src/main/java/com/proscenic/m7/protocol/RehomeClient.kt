@@ -44,11 +44,123 @@ class RehomeClient(
         val discoveredPort: Int,
         val robotSerialNumber: String?,
         val steps: List<StepLog>,
-        val errorMessage: String? = null
+        val errorMessage: String? = null,
+        val discoveredRobotIp: String? = null
     )
 
     /**
-     * Executes the 6-step re-homing sequence against the physical vacuum on SoftAP.
+     * Fast LAN + SoftAP UDP 7913 scanner (`PAIRING_LOG_ANALYSIS.md` §6 & `FIELD_NOTES.md`):
+     * After leaving SoftAP mode and joining the home Wi-Fi, `network_proxy` keeps UDP port 7913 open
+     * on the robot's LAN IP (`wlan0`). When the phone's DHCP IP changes on home Wi-Fi (e.g. `.110` -> `.165`),
+     * we can find the robot directly on the `/24` LAN and re-point `setUrl` + `setID` without SoftAP mode!
+     */
+    suspend fun repointRobotOnLan(
+        serverHostIp: String,
+        httpPort: Int = 8080,
+        gatewayPort: Int = 8081,
+        wifiSsid: String = "",
+        wifiPassword: String = "",
+        userId: String = "local_user",
+        knownRobotIp: String? = null,
+        onStepProgress: (StepLog) -> Unit = {}
+    ): RehomeResult = withContext(Dispatchers.IO) {
+        val steps = mutableListOf<StepLog>()
+
+        fun record(step: Int, title: String, txRaw: String, rx: String, ok: Boolean): StepLog {
+            val redactedTx = runCatching {
+                JSONObject(txRaw).apply {
+                    if (has("staPwd")) put("staPwd", "********")
+                }.toString().replace("\\/", "/")
+            }.getOrDefault(txRaw)
+            val entry = StepLog(step, title, redactedTx, rx, ok)
+            steps.add(entry)
+            onStepProgress(entry)
+            return entry
+        }
+
+        val cleanUrl = "http://${serverHostIp.trim()}:$httpPort/"
+        val snCmd = """{"cmd":"getSn"}"""
+
+        try {
+            val discovered = discoverRobotUdp7913(serverHostIp.trim(), knownRobotIp)
+                ?: return@withContext RehomeResult(
+                    success = false,
+                    discoveredPort = defaultPort,
+                    robotSerialNumber = null,
+                    steps = steps,
+                    errorMessage = "Could not find robot on LAN UDP 7913 (scanned ${subnetPrefixOf(serverHostIp)}.1..254:7913). If the robot was rebooted since pairing, hold Power + Home for 5s to re-run SoftAP pairing."
+                )
+
+            val targetIp = discovered.first
+            val reply = discovered.second
+            val serialNumber = reply.optString("sn", "").trim()
+            record(0, "0/4 Found Robot on LAN ($targetIp:$defaultPort, SN=$serialNumber)", snCmd, reply.toString(), true)
+
+            // Step 1: setUrl (Channel-A HTTP base URL -> writes /data/bin/Run/Config/url)
+            val setUrlHttp = """{"cmd":"setUrl","url":"$cleanUrl"}"""
+            val r1 = requireOkRawAt(targetIp, defaultPort, setUrlHttp, "setUrl(url)")
+            record(1, "1/4 Update Channel-A URL ($cleanUrl)", setUrlHttp, r1.toString(), true)
+
+            // Step 2: setUrl (Channel-B Push Gateway -> writes /data/bin/Run/Config/ip_port.json)
+            val setUrlGw = JSONObject()
+                .put("cmd", "setUrl")
+                .put("ip", serverHostIp.trim())
+                .put("port", gatewayPort)
+                .toString()
+            val r2 = requireOkRawAt(targetIp, defaultPort, setUrlGw, "setUrl(ip,port)")
+            record(2, "2/4 Update Channel-B Gateway (${serverHostIp.trim()}:$gatewayPort)", setUrlGw, r2.toString(), true)
+
+            // Step 3: getCfg
+            val getCfg = """{"cmd":"getCfg"}"""
+            val r3 = sendUdpRawCommandTo(targetIp, defaultPort, getCfg) ?: JSONObject().put("result", "ok")
+            record(3, "3/4 Verify Config (getCfg)", getCfg, r3.toString(), true)
+
+            // Step 4: setID (Re-arms BindUser & triggers HTTP binding + TCP gateway reconnect)
+            val setId = JSONObject()
+                .put("cmd", "setID")
+                .put("id", userId.ifBlank { "local_user" })
+                .put("deviceSN", serialNumber)
+                .toString()
+            val r4 = requireOkRawAt(targetIp, defaultPort, setId, "setID")
+            record(4, "4/4 Re-Arm Binding to ${serverHostIp.trim()} (setID)", setId, r4.toString(), true)
+
+            // Optional Step 5 & 6: If saved Wi-Fi credentials are provided, also send setSta + applyCfg
+            // so the robot reloads network config immediately if needed.
+            if (wifiSsid.isNotBlank() && wifiPassword.length in 8..64 && !wifiSsid.startsWith("Proscenic-", ignoreCase = true)) {
+                val setSta = JSONObject()
+                    .put("cmd", "setSta")
+                    .put("staName", wifiSsid.trim())
+                    .put("staPwd", wifiPassword)
+                    .toString()
+                runCatching {
+                    val r5 = requireOkRawAt(targetIp, defaultPort, setSta, "setSta")
+                    record(5, "5/6 Confirm Home Wi-Fi ('${wifiSsid.trim()}')", setSta, r5.toString(), true)
+                    val applyCfg = """{"cmd":"applyCfg"}"""
+                    val r6 = sendUdpRawCommandTo(targetIp, defaultPort, applyCfg)
+                    record(6, "6/6 Commit Config (applyCfg)", applyCfg, r6?.toString() ?: """{"result":"ok"}""", true)
+                }
+            }
+
+            RehomeResult(
+                success = true,
+                discoveredPort = defaultPort,
+                robotSerialNumber = serialNumber,
+                steps = steps,
+                discoveredRobotIp = targetIp
+            )
+        } catch (e: Exception) {
+            RehomeResult(
+                success = false,
+                discoveredPort = defaultPort,
+                robotSerialNumber = null,
+                steps = steps,
+                errorMessage = e.message ?: "LAN UDP 7913 re-point failed"
+            )
+        }
+    }
+
+    /**
+     * Executes the 6-step re-homing sequence against the physical vacuum on SoftAP (or falls back to LAN UDP 7913).
      */
     suspend fun executeRehome(
         serverHostIp: String,
@@ -79,7 +191,7 @@ class RehomeClient(
                 discoveredPort = defaultPort,
                 robotSerialNumber = null,
                 steps = steps,
-                errorMessage = "Enter your home 2.4GHz Wi-Fi SSID (not the robot's Proscenic-* hotspot name)."
+                errorMessage = "Enter your home 2.4GHz Wi-Fi SSID (e.g. 'Robots'), or tap 'Reconnect Robot Already on Home Wi-Fi' above if it is already paired."
             )
         }
 
@@ -104,31 +216,41 @@ class RehomeClient(
         }
 
         val cleanUrl = "http://${serverHostIp.trim()}:$httpPort/"
+        var targetIp = robotIp
         var targetPort = defaultPort
         var serialNumber = ""
 
         try {
-            // Step 0: Probe UDP 7913 first (and read serial with getSn)
+            // Step 0: Probe target robotIp:7913 first; if unreachable, also scan the /24 LAN in case robot is already on home Wi-Fi!
             val snCmd = """{"cmd":"getSn"}"""
-            val reply = sendUdpRawCommand(targetPort, snCmd) ?: run {
-                val swept = sweepPorts(9000..9100)
-                    ?: return@withContext RehomeResult(
-                        success = false,
-                        discoveredPort = targetPort,
-                        robotSerialNumber = null,
-                        steps = steps,
-                        errorMessage = "No reply from $robotIp:$targetPort. Ensure the vacuum is in pairing mode (hold Power + Home 5s) and your phone is connected to the 'Proscenic-XXXX' Wi-Fi AP."
-                    )
-                targetPort = swept.first
-                swept.second
+            val directReply = sendUdpRawCommandTo(targetIp, targetPort, snCmd)
+            val reply = if (directReply != null) {
+                directReply
+            } else {
+                val lanFound = discoverRobotUdp7913(serverHostIp.trim(), null)
+                if (lanFound != null) {
+                    targetIp = lanFound.first
+                    lanFound.second
+                } else {
+                    val swept = sweepPorts(targetIp, 9000..9100)
+                        ?: return@withContext RehomeResult(
+                            success = false,
+                            discoveredPort = targetPort,
+                            robotSerialNumber = null,
+                            steps = steps,
+                            errorMessage = "No reply from $robotIp:$targetPort (or on LAN ${subnetPrefixOf(serverHostIp)}.x:7913). Connect your phone's Wi-Fi to 'Proscenic-XXXX' (hold Power + Home 5s on robot) or tap 'Scan & Reconnect on Home Wi-Fi'."
+                        )
+                    targetPort = swept.first
+                    swept.second
+                }
             }
             serialNumber = reply.optString("sn", "").trim()
-            record(0, "0/6 Probe UDP $targetPort & Read Serial (getSn)", snCmd, reply.toString(), true)
+            record(0, "0/6 Probe $targetIp:$targetPort & Read Serial (getSn)", snCmd, reply.toString(), true)
 
             // Step 1: setUrl (Channel-A HTTP base URL -> writes /data/bin/Run/Config/url)
             // IMPORTANT: Do NOT escape '/' as '\/' — robot firmware reads raw URL string
             val setUrlHttp = """{"cmd":"setUrl","url":"$cleanUrl"}"""
-            val r1 = requireOkRaw(targetPort, setUrlHttp, "setUrl(url)")
+            val r1 = requireOkRawAt(targetIp, targetPort, setUrlHttp, "setUrl(url)")
             record(1, "1/6 Set Channel-A Base URL ($cleanUrl)", setUrlHttp, r1.toString(), true)
 
             // Step 2: setUrl (Channel-B Push Gateway -> writes /data/bin/Run/Config/ip_port.json)
@@ -137,12 +259,12 @@ class RehomeClient(
                 .put("ip", serverHostIp.trim())
                 .put("port", gatewayPort)
                 .toString()
-            val r2 = requireOkRaw(targetPort, setUrlGw, "setUrl(ip,port)")
+            val r2 = requireOkRawAt(targetIp, targetPort, setUrlGw, "setUrl(ip,port)")
             record(2, "2/6 Set Channel-B Push Gateway (${serverHostIp.trim()}:$gatewayPort)", setUrlGw, r2.toString(), true)
 
             // Step 3: getCfg (Verify config state)
             val getCfg = """{"cmd":"getCfg"}"""
-            val r3 = sendUdpRawCommand(targetPort, getCfg) ?: JSONObject().put("result", "ok")
+            val r3 = sendUdpRawCommandTo(targetIp, targetPort, getCfg) ?: JSONObject().put("result", "ok")
             record(3, "3/6 Read Current Robot Config (getCfg)", getCfg, r3.toString(), true)
 
             // Step 4: setID (Arm BindUser thread with userId + deviceSN)
@@ -151,7 +273,7 @@ class RehomeClient(
                 .put("id", userId)
                 .put("deviceSN", serialNumber)
                 .toString()
-            val r4 = requireOkRaw(targetPort, setId, "setID")
+            val r4 = requireOkRawAt(targetIp, targetPort, setId, "setID")
             record(4, "4/6 Arm Device Binding (setID)", setId, r4.toString(), true)
 
             // Step 5: setSta (Store home Wi-Fi credentials in memory)
@@ -160,12 +282,12 @@ class RehomeClient(
                 .put("staName", wifiSsid.trim())
                 .put("staPwd", wifiPassword)
                 .toString()
-            val r5 = requireOkRaw(targetPort, setSta, "setSta")
+            val r5 = requireOkRawAt(targetIp, targetPort, setSta, "setSta")
             record(5, "5/6 Store Home Wi-Fi ('${wifiSsid.trim()}')", setSta, r5.toString(), true)
 
             // Step 6: applyCfg (Commit Wi-Fi config; robot tears down AP and joins home LAN)
             val applyCfg = """{"cmd":"applyCfg"}"""
-            val r6 = sendUdpRawCommand(targetPort, applyCfg)
+            val r6 = sendUdpRawCommandTo(targetIp, targetPort, applyCfg)
             val rxText = r6?.toString() ?: """{"note":"SoftAP closed as robot switched to home Wi-Fi (expected)"}"""
             record(6, "6/6 Commit & Join Home Wi-Fi (applyCfg)", applyCfg, rxText, true)
 
@@ -173,7 +295,8 @@ class RehomeClient(
                 success = true,
                 discoveredPort = targetPort,
                 robotSerialNumber = serialNumber,
-                steps = steps
+                steps = steps,
+                discoveredRobotIp = targetIp
             )
         } catch (e: Exception) {
             RehomeResult(
@@ -181,25 +304,90 @@ class RehomeClient(
                 discoveredPort = targetPort,
                 robotSerialNumber = serialNumber.ifBlank { null },
                 steps = steps,
-                errorMessage = e.message ?: "UDP provisioning failed"
+                errorMessage = e.message ?: "UDP provisioning failed",
+                discoveredRobotIp = targetIp
             )
         }
     }
 
-    private fun requireOkRaw(port: Int, rawJson: String, label: String): JSONObject {
-        val reply = sendUdpRawCommand(port, rawJson)
-            ?: throw IllegalStateException("No UDP reply for $label on $robotIp:$port")
+    private fun subnetPrefixOf(ip: String): String {
+        val parts = ip.trim().split('.')
+        return if (parts.size == 4) "${parts[0]}.${parts[1]}.${parts[2]}" else "192.168.1"
+    }
+
+    /**
+     * Broadcasts + sweeps the `/24` LAN subnet on UDP port 7913 for `{"cmd":"getSn"}`.
+     */
+    fun discoverRobotUdp7913(serverHostIp: String, knownRobotIp: String? = null): Pair<String, JSONObject>? {
+        val probeBytes = """{"cmd":"getSn"}""".toByteArray(Charsets.UTF_8)
+
+        // 1. Try knownRobotIp or SoftAP 192.168.78.1 first if provided
+        if (!knownRobotIp.isNullOrBlank()) {
+            sendUdpRawCommandTo(knownRobotIp.substringBefore(':'), defaultPort, """{"cmd":"getSn"}""", 400)?.let {
+                if (it.optString("sn").isNotBlank()) return knownRobotIp.substringBefore(':') to it
+            }
+        }
+
+        val prefix = subnetPrefixOf(serverHostIp)
+        DatagramSocket().use { sock ->
+            sock.broadcast = true
+            sock.soTimeout = 350
+
+            // Send to subnet broadcast, global broadcast, and SoftAP IP first
+            val priorityTargets = listOf("$prefix.255", "255.255.255.255", DEFAULT_AP_IP)
+            for (target in priorityTargets) {
+                runCatching {
+                    val addr = InetAddress.getByName(target)
+                    sock.send(DatagramPacket(probeBytes, probeBytes.size, addr, defaultPort))
+                }
+            }
+
+            // Sweep all 254 hosts in the /24 subnet in two fast batches
+            for (host in 1..254) {
+                val ip = "$prefix.$host"
+                if (ip == serverHostIp) continue
+                runCatching {
+                    val addr = InetAddress.getByName(ip)
+                    sock.send(DatagramPacket(probeBytes, probeBytes.size, addr, defaultPort))
+                }
+            }
+
+            val deadline = System.currentTimeMillis() + 900L
+            val buf = ByteArray(4096)
+            while (System.currentTimeMillis() < deadline) {
+                try {
+                    val pkt = DatagramPacket(buf, buf.size)
+                    sock.receive(pkt)
+                    val text = String(pkt.data, 0, pkt.length, Charsets.UTF_8).trim()
+                    val json = runCatching { JSONObject(text) }.getOrNull() ?: continue
+                    if (json.optString("result") == "ok" && json.optString("sn").isNotBlank()) {
+                        val senderIp = pkt.address?.hostAddress ?: continue
+                        return senderIp to json
+                    }
+                } catch (_: SocketTimeoutException) {
+                    break
+                } catch (_: Exception) {
+                    break
+                }
+            }
+        }
+        return null
+    }
+
+    private fun requireOkRawAt(targetIp: String, port: Int, rawJson: String, label: String): JSONObject {
+        val reply = sendUdpRawCommandTo(targetIp, port, rawJson)
+            ?: throw IllegalStateException("No UDP reply for $label on $targetIp:$port")
         if (reply.optString("result") != "ok") {
             throw IllegalStateException("Robot rejected $label: $reply")
         }
         return reply
     }
 
-    private fun sendUdpRawCommand(port: Int, rawJson: String): JSONObject? {
+    private fun sendUdpRawCommandTo(targetIp: String, port: Int, rawJson: String, customTimeoutMs: Int = timeoutMs): JSONObject? {
         val bytes = rawJson.toByteArray(Charsets.UTF_8)
-        val addr = InetAddress.getByName(robotIp)
+        val addr = runCatching { InetAddress.getByName(targetIp) }.getOrNull() ?: return null
         DatagramSocket().use { sock ->
-            sock.soTimeout = timeoutMs
+            sock.soTimeout = customTimeoutMs
             repeat(2) {
                 try {
                     sock.send(DatagramPacket(bytes, bytes.size, addr, port))
@@ -212,15 +400,17 @@ class RehomeClient(
                     }
                 } catch (_: SocketTimeoutException) {
                     // retry once
+                } catch (_: Exception) {
+                    return null
                 }
             }
         }
         return null
     }
 
-    private fun sweepPorts(range: IntRange): Pair<Int, JSONObject>? {
+    private fun sweepPorts(targetIp: String, range: IntRange): Pair<Int, JSONObject>? {
         val probe = JSONObject().put("cmd", "getSn").toString().toByteArray(Charsets.UTF_8)
-        val addr = InetAddress.getByName(robotIp)
+        val addr = runCatching { InetAddress.getByName(targetIp) }.getOrNull() ?: return null
         DatagramSocket().use { sock ->
             sock.soTimeout = 400
             for (p in range) {

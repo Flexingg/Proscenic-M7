@@ -171,9 +171,9 @@ fun MapDashboardScreen(
                         }
                     } else {
                         Text(
-                            text = "Your phone is listening for your Proscenic M7 on ${uiState.localLanIp}:8081, but the robot has not opened a TCP connection yet.\n\n" +
-                                "• Make sure during SoftAP Pairing you entered your HOME 2.4GHz Wi-Fi name & password (NOT the 'Proscenic-7190...' hotspot name).\n" +
-                                "• Ensure your phone is now connected to that same home Wi-Fi network.",
+                            text = "Your phone is listening for your Proscenic M7 on ${uiState.localLanIp}:8081.\n\n" +
+                                "• If you already paired the robot to your home Wi-Fi ('${uiState.savedWifiSsid}') and your phone's IP changed, tap 'Scan & Reconnect on Home Wi-Fi' below!\n" +
+                                "• For initial setup, open 'Pairing & Diagnostics'.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = colors.textSecondary
                         )
@@ -182,10 +182,18 @@ fun MapDashboardScreen(
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             LivingFlowPillButton(
-                                text = "Open Pairing & Diagnostics",
+                                text = if (uiState.rehomeInProgress) "Scanning LAN..." else "Scan & Reconnect on Home Wi-Fi",
+                                icon = Icons.Default.Refresh,
                                 variant = FluidButtonVariant.PRIMARY,
+                                enabled = !uiState.rehomeInProgress,
+                                onClick = { viewModel.reconnectRobotOnLanNow() },
+                                modifier = Modifier.weight(1.2f)
+                            )
+                            LivingFlowPillButton(
+                                text = "Pairing Tab",
+                                variant = FluidButtonVariant.SECONDARY_GLASS,
                                 onClick = onNavigateToPairing,
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier.weight(0.8f)
                             )
                         }
                     }
@@ -226,6 +234,7 @@ fun MapDashboardScreen(
                         ) {
                             val dotColor = when {
                                 !uiState.robotSocketConnected -> colors.danger
+                                uiState.status.isSleepOrShutdown -> colors.warning
                                 uiState.status.errorCode != 0 -> colors.warning
                                 uiState.status.mode == "sweep" -> colors.accentCyan
                                 else -> colors.success
@@ -300,12 +309,53 @@ fun MapDashboardScreen(
                 subtitle = if (uiState.robotSocketConnected) {
                     "Robot IP: ${uiState.connectedRobotAddress ?: "connected"} • Pose: (${uiState.status.posMm.xMm}, ${uiState.status.posMm.yMm}) mm • Suction: ${uiState.status.suction.label} • Water: ${uiState.status.waterLevel}/4"
                 } else {
-                    "No TCP client on ${uiState.localLanIp}:8081 yet. Open 'Pairing & HA' tab to verify connection or re-home."
+                    "No TCP client on ${uiState.localLanIp}:8081 yet. Tap 'Scan & Reconnect' or open 'Pairing & HA'."
                 },
-                accentDotColor = if (uiState.robotSocketConnected) colors.success else colors.danger,
+                accentDotColor = when {
+                    !uiState.robotSocketConnected -> colors.danger
+                    uiState.status.isSleepOrShutdown -> colors.warning
+                    else -> colors.success
+                },
                 progressFraction = if (uiState.robotSocketConnected) (uiState.status.battery / 100f).coerceIn(0.05f, 1f) else null,
                 modifier = Modifier.fillMaxWidth()
             )
+
+            // Prominent Wake Bar when the robot is in 'shutdown' / 'dormant' sleep mode (like Screenshot 2 at 7:38)
+            if (uiState.robotSocketConnected && uiState.status.isSleepOrShutdown) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .livingFlowGlass(
+                            level = GlassMaterialLevel.REGULAR,
+                            cornerRadius = tokens.radii.lg,
+                            isActive = true,
+                            accentOverride = colors.warning
+                        )
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Robot is in '${uiState.status.mode}' Sleep State",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = colors.warning,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Tap 'Wake Robot' below, or press the physical Power button on the vacuum (or place it on its charging dock) so it wakes to 'Ready' and accepts motor commands.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.textPrimary
+                        )
+                    }
+                    LivingFlowPillButton(
+                        text = "Wake Robot",
+                        icon = Icons.Default.PlayArrow,
+                        variant = FluidButtonVariant.PRIMARY,
+                        onClick = { viewModel.wakeRobotFromStandby() }
+                    )
+                }
+            }
 
             // Only show map interaction toolbar when a real map is present
             if (realMap != null) {
@@ -599,10 +649,18 @@ private fun MapContextualSubIsland(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = if (uiState.roomNames.isEmpty()) "No segmented rooms in map yet" else "Tap rooms:",
+                        text = if (uiState.roomNames.isEmpty()) "No segmented rooms in map yet:" else "Tap rooms:",
                         style = MaterialTheme.typography.labelSmall,
                         color = colors.textSecondary
                     )
+                    if (uiState.roomNames.isEmpty()) {
+                        LivingFlowPillButton(
+                            text = "Segment Rooms Now (21030)",
+                            icon = Icons.Default.Refresh,
+                            variant = FluidButtonVariant.TONAL_ACCENT,
+                            onClick = { viewModel.resetRoomSegmentation() }
+                        )
+                    }
                     uiState.roomNames.forEach { (roomId, name) ->
                         val selected = roomId in uiState.selectedRoomLabels
                         Box(
@@ -885,9 +943,9 @@ private fun RemoteControlGlassDialog(
                 ) {
                     CircularGlassIconButton(
                         icon = Icons.Default.RotateLeft,
-                        contentDescription = "Turn Left (ctrlCode 3007)",
+                        contentDescription = "Turn Left (CCW, ctrlCode 3008)",
                         size = 58.dp,
-                        onClick = { onStep(3007) }
+                        onClick = { onStep(3008) }
                     )
                     CircularGlassIconButton(
                         icon = Icons.Default.MyLocation,
@@ -899,9 +957,9 @@ private fun RemoteControlGlassDialog(
                     )
                     CircularGlassIconButton(
                         icon = Icons.Default.RotateRight,
-                        contentDescription = "Turn Right (ctrlCode 3008)",
+                        contentDescription = "Turn Right (CW, ctrlCode 3007)",
                         size = 58.dp,
-                        onClick = { onStep(3008) }
+                        onClick = { onStep(3007) }
                     )
                 }
                 CircularGlassIconButton(

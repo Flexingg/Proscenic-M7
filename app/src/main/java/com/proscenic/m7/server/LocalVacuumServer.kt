@@ -12,6 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -59,6 +60,7 @@ class LocalVacuumServer(
     private val onPathReceived: (CleanPath) -> Unit = {},
     private val onZonesReceived: (List<MapRegion>) -> Unit = {},
     private val onSchedulesReceived: (List<ScheduleEntry>) -> Unit = {},
+    private val onCommandAck: (infoType: Int, message: String, rawJson: String) -> Unit = { _, _, _ -> },
     private val onWireTrace: (WireTraceEntry) -> Unit = {},
     private val onExternalHaCommand: (String, JSONObject) -> Unit = { _, _ -> }
 ) {
@@ -132,9 +134,26 @@ class LocalVacuumServer(
     }
 
     /**
-     * Enqueues or immediately sends a `#\t#`-framed command to the connected robot on Channel B.
+     * Sends a `#\t#`-framed command to the connected robot on Channel B using `Dispatchers.IO`
+     * (avoiding `NetworkOnMainThreadException` when called from Android UI button clicks).
      */
     fun sendFrameToRobot(frame: String): Boolean {
+        val isConnectedNow = activeRobotOutput.get() != null && _isRobotConnected.value
+        scope.launch(Dispatchers.IO) {
+            writeFrameInternal(frame)
+        }
+        return isConnectedNow
+    }
+
+    fun sendFramesToRobot(frames: List<String>) {
+        scope.launch(Dispatchers.IO) {
+            for (frame in frames) {
+                writeFrameInternal(frame)
+            }
+        }
+    }
+
+    private fun writeFrameInternal(frame: String): Boolean {
         val out = activeRobotOutput.get()
         if (out != null) {
             return try {
@@ -146,20 +165,13 @@ class LocalVacuumServer(
                 true
             } catch (e: Exception) {
                 outboundQueue.add(frame)
+                trace("B-TCP", "ERR", "Socket write error (${e.javaClass.simpleName}), queued", frame.removeSuffix(ProscenicProtocol.FRAME_DELIMITER))
                 false
             }
         } else {
             outboundQueue.add(frame)
             trace("B-TCP", "QUEUE", "Queued command (waiting for robot TCP connection)", frame.removeSuffix(ProscenicProtocol.FRAME_DELIMITER))
             return false
-        }
-    }
-
-    fun sendFramesToRobot(frames: List<String>) {
-        scope.launch {
-            for (frame in frames) {
-                sendFrameToRobot(frame)
-            }
         }
     }
 
@@ -244,10 +256,10 @@ class LocalVacuumServer(
                 }
                 // Flush any queued commands + request real status, map, zones, and schedules from robot
                 drainOutboundQueue(out)
-                sendFrameToRobot(ProscenicProtocol.buildRequestStatus())
-                sendFrameToRobot(ProscenicProtocol.buildRequestMapUploadNow())
-                sendFrameToRobot(ProscenicProtocol.buildGetAreaTactics())
-                sendFrameToRobot(ProscenicProtocol.buildGetSchedules())
+                writeFrameInternal(ProscenicProtocol.buildRequestStatus())
+                writeFrameInternal(ProscenicProtocol.buildRequestMapUploadNow())
+                writeFrameInternal(ProscenicProtocol.buildGetAreaTactics())
+                writeFrameInternal(ProscenicProtocol.buildGetSchedules())
             }
             21006 -> {
                 // Keepalive Ping -> MUST reply immediately with enveloped 21006 + isExistConnect:true
@@ -453,13 +465,24 @@ class LocalVacuumServer(
         val dataRaw = params["data"] ?: return
         val outer = runCatching { JSONObject(dataRaw) }.getOrNull() ?: return
         val infoType = outer.optInt("infoType", params["infoType"]?.toIntOrNull() ?: -1)
+        val message = outer.optString("message", "").trim()
         val innerData = outer.optJSONObject("data") ?: outer
 
-        trace("A-HTTP", "RX", "POST $path (infoType=$infoType)", dataRaw.take(240))
-        dispatchRobotInfoPayload(infoType, innerData)
+        trace(
+            "A-HTTP",
+            "RX",
+            "POST $path (infoType=$infoType${if (message.isNotEmpty()) ", msg=$message" else ""})",
+            dataRaw.take(240)
+        )
+        dispatchRobotInfoPayload(infoType, innerData, message, dataRaw)
     }
 
-    private fun dispatchRobotInfoPayload(infoType: Int, innerData: JSONObject) {
+    private fun dispatchRobotInfoPayload(
+        infoType: Int,
+        innerData: JSONObject,
+        message: String = "",
+        rawJson: String = ""
+    ) {
         when (infoType) {
             20001 -> {
                 val updated = ProscenicProtocol.parseStatus20001(innerData, latestStatusSnapshot)
@@ -492,6 +515,18 @@ class LocalVacuumServer(
             21002 -> {
                 val schedules = ProscenicProtocol.parseSchedulesFrom21002(innerData)
                 onSchedulesReceived(schedules)
+            }
+            21001, 21003, 21005, 21012, 21017, 21020, 21022, 21023, 21024, 21025, 21027, 21030 -> {
+                val ackMsg = message.ifBlank { innerData.optString("message", "ok") }
+                onCommandAck(infoType, ackMsg, rawJson.ifBlank { innerData.toString() })
+                // Immediately request fresh status (and fresh map after 21030 room segmentation)
+                writeFrameInternal(ProscenicProtocol.buildRequestStatus())
+                if (infoType == 21030) {
+                    scope.launch(Dispatchers.IO) {
+                        delay(1200L)
+                        writeFrameInternal(ProscenicProtocol.buildRequestMapUploadNow())
+                    }
+                }
             }
         }
     }
