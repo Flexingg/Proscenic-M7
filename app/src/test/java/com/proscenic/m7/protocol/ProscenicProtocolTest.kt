@@ -180,6 +180,6 @@ class ProscenicProtocolTest {
         )
 
         assertFalse(badResult.success)
-        assertTrue(badResult.errorMessage?.contains("HOME 2.4GHz Wi-Fi name") == true)
+        assertTrue(badResult.errorMessage?.contains("HOME 2.4GHz router Wi-Fi SSID") == true)
     }
 }
