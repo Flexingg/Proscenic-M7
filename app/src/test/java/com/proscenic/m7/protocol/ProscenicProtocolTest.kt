@@ -103,7 +103,7 @@ class ProscenicProtocolTest {
         val frame = ProscenicProtocol.buildSetSchedules(schedules, quietHours)
         val unwrapped = JSONObject(frame.removeSuffix("#\t#"))
         val dataObj = unwrapped.getJSONObject("data").getJSONObject("data")
-        val items = dataObj.getJSONArray("items")
+        val items = dataObj.getJSONArray("value")
 
         // 2 active schedules + 2 split overnight quiet-hour entries (23:00->23:59 and 00:00->07:00)
         assertEquals(4, items.length())
@@ -115,7 +115,7 @@ class ProscenicProtocolTest {
     }
 
     @Test
-    fun `RehomeClient dryRun executes all 6 UDP 7913 steps without sending buggy bindOk`() = runBlocking {
+    fun `RehomeClient dryRun executes all UDP 7913 steps without sending buggy bindOk`() = runBlocking {
         val client = RehomeClient()
         val result = client.executeRehome(
             serverHostIp = "192.168.1.50",
@@ -128,13 +128,13 @@ class ProscenicProtocolTest {
         )
 
         assertTrue(result.success)
-        assertEquals(6, result.steps.size)
+        assertEquals(7, result.steps.size)
         assertFalse(
             "Must never send buggy bindOk command (causes shell fork storm in FUN_00463c60)",
             result.steps.any { it.txJson.contains("bindOk") }
         )
         assertTrue(result.steps[1].txJson.contains("http://192.168.1.50:8080/"))
         assertTrue(result.steps[2].txJson.contains("\"port\":8081"))
-        assertTrue(result.steps[5].txJson.contains("applyCfg"))
+        assertTrue(result.steps[6].txJson.contains("applyCfg"))
     }
 }
