@@ -188,7 +188,7 @@ class VacuumViewModel : ViewModel() {
         runCatching {
             if (cachedMapFile.exists()) {
                 val root = JSONObject(cachedMapFile.readText(Charsets.UTF_8))
-                val parsedMap = root.optJSONObject("map20002")?.let { ProscenicProtocol.parseMapUpload20002(it) }
+                val parsedMap = root.optJSONObject("map20002")?.let { mapJson -> ProscenicProtocol.parseMap20002(mapJson) }
                 val namesObj = root.optJSONObject("roomNames")
                 val namesMap = mutableMapOf<Int, String>()
                 if (namesObj != null) {
