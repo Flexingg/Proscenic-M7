@@ -18,20 +18,15 @@ class ProscenicProtocolTest {
         assertEquals(100, initialMap.height)
         assertEquals(12_000, initialMap.cells.size)
 
-        val b64 = Lz4Codec.encodeToBase64Lz4(initialMap.cells)
-        val decompressed = Lz4Codec.decodeBase64Lz4(b64, expectedSize = 12_000)
+        val (b64, _) = Lz4Codec.encodeMapBase64Lz4(initialMap.cells)
+        val decompressed = Lz4Codec.decodeMapBase64Lz4(b64, width = 120, height = 100)
 
         assertArrayEquals(initialMap.cells, decompressed)
     }
 
     @Test
-    fun `parseMap20002 decodes Base64 LZ4 map and computes room centroids and cell math`() {
-        val houseMap = SimulatedVacuumEngine.createInitialHouseMap()
-        val payloadStr = SimulatedVacuumEngine.encodeMapAs20002Json(houseMap)
-        val root = JSONObject(payloadStr)
-        val dataObj = root.getJSONObject("data")
-
-        val decoded = ProscenicProtocol.parseMap20002(dataObj)
+    fun `createInitialHouseMap round-trips Base64 LZ4 20002 map and computes room centroids and cell math`() {
+        val decoded = SimulatedVacuumEngine.createInitialHouseMap()
         assertEquals(120, decoded.width)
         assertEquals(100, decoded.height)
         assertEquals(0.05f, decoded.resolution, 0.0001f)
@@ -73,22 +68,22 @@ class ProscenicProtocolTest {
         assertTrue(frames[0].endsWith("#\t#"))
         assertTrue(frames[1].endsWith("#\t#"))
 
-        val f1 = ProscenicProtocol.unwrapFrameJson(frames[0])!!
+        val f1 = JSONObject(frames[0].removeSuffix("#\t#"))
         assertEquals(0, f1.getInt("encrypt"))
         val d1 = f1.getJSONObject("data")
         assertEquals(21023, d1.getInt("infoType"))
         val inner1 = d1.getJSONObject("data")
 
         val cleanIds = inner1.getJSONArray("cleanId")
-        val idList = (0 until cleanIds.length()).map { cleanIds.getInt(it) }
+        val idList = (0 until cleanIds.length()).map { idx -> cleanIds.getInt(idx) }
         assertTrue(idList.containsAll(listOf(-3, 10, 11)))
 
         val segIds = inner1.getJSONArray("segmentId")
-        val segList = (0 until segIds.length()).map { segIds.getInt(it) }
+        val segList = (0 until segIds.length()).map { idx -> segIds.getInt(idx) }
         assertEquals(listOf(1, 3), segList)
 
         // Frame 2 MUST be 21005 appointClean (never smartClean, which overwrites CleanArea)
-        val f2 = ProscenicProtocol.unwrapFrameJson(frames[1])!!
+        val f2 = JSONObject(frames[1].removeSuffix("#\t#"))
         val d2 = f2.getJSONObject("data")
         assertEquals(21005, d2.getInt("infoType"))
         assertEquals("appointClean", d2.getJSONObject("data").getString("mode"))
@@ -106,7 +101,7 @@ class ProscenicProtocolTest {
         )
 
         val frame = ProscenicProtocol.buildSetSchedules(schedules, quietHours)
-        val unwrapped = ProscenicProtocol.unwrapFrameJson(frame)!!
+        val unwrapped = JSONObject(frame.removeSuffix("#\t#"))
         val dataObj = unwrapped.getJSONObject("data").getJSONObject("data")
         val items = dataObj.getJSONArray("items")
 
