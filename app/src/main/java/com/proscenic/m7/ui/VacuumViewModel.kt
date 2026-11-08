@@ -959,7 +959,7 @@ class VacuumViewModel : ViewModel() {
             val result = AiMapArtEngine.generateTopDownObjectArt(
                 provider = provider,
                 apiKey = apiKey,
-                sourcePhoto = photoBitmap,
+                photoBitmap = photoBitmap,
                 objectLabel = cleanLabel,
                 widthCm = safeW,
                 depthCm = safeD
@@ -969,15 +969,15 @@ class VacuumViewModel : ViewModel() {
                 onSuccess = { gen ->
                     val newItem = AiMapArtItem(
                         id = UUID.randomUUID().toString(),
-                        label = cleanLabel,
+                        label = gen.detectedLabel.ifBlank { cleanLabel },
                         centerMm = _uiState.value.pendingAiBoxCenterMm,
                         widthMm = safeW * 10,
                         heightMm = safeD * 10,
                         rotationDeg = rotationDeg,
                         topDownPngBase64 = gen.topDownPngBase64,
-                        sourcePhotoThumbBase64 = gen.sourceThumbBase64,
-                        providerUsed = provider,
-                        aiDescription = gen.aiSummary
+                        sourcePhotoThumbBase64 = null,
+                        providerUsed = provider.label,
+                        aiDescription = gen.description
                     )
                     _uiState.update { s ->
                         s.copy(
@@ -987,7 +987,7 @@ class VacuumViewModel : ViewModel() {
                             aiGenerationInProgress = false,
                             showAiArtStudioModal = false,
                             aiGenerationStatus = null,
-                            lastActionBanner = "Placed top-down AI Map Art '${cleanLabel}' (${safeW}×${safeD}cm) via ${provider.displayName}!"
+                            lastActionBanner = "Placed top-down AI Map Art '${newItem.label}' (${safeW}×${safeD}cm) via ${gen.providerSummary}!"
                         )
                     }
                     persistCachedMapAndArt()
@@ -1026,8 +1026,9 @@ class VacuumViewModel : ViewModel() {
                 roomNames = state.roomNames,
                 aiArtItems = state.aiArtItems
             )
+            val msg = res.getOrElse { "Map export failed: ${it.message}" }
             _uiState.update {
-                it.copy(lastActionBanner = res.message)
+                it.copy(lastActionBanner = msg)
             }
         }
     }

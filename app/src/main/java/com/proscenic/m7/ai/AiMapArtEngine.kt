@@ -43,6 +43,9 @@ enum class ByokProvider(
     CLAUDE("claude", "Claude", "Anthropic", "sk-ant-..."),
     OPENAI("openai", "OpenAI", "GPT-4o / DALL·E", "sk-...");
 
+    val displayName: String get() = "$label ($badge)"
+    val modelHint: String get() = keyHint
+
     companion object {
         fun fromWire(id: String?): ByokProvider =
             entries.firstOrNull { it.wireId.equals(id, ignoreCase = true) } ?: GEMINI
@@ -66,6 +69,9 @@ data class AiMapArtItem(
     val providerUsed: String = "Gemini",
     val aiDescription: String = ""
 ) {
+    val widthCm: Int get() = (widthMm / 10).coerceAtLeast(1)
+    val heightCm: Int get() = (heightMm / 10).coerceAtLeast(1)
+
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
         put("label", label)

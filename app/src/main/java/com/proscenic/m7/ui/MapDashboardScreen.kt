@@ -1225,7 +1225,7 @@ private fun AiMapArtStudioDialog(
         focusedTextColor = colors.textPrimary,
         unfocusedTextColor = colors.textPrimary,
         focusedBorderColor = colors.accentCyan,
-        unfocusedBorderColor = colors.strokeGlassRim,
+        unfocusedBorderColor = colors.divider,
         focusedLabelColor = colors.accentCyan,
         unfocusedLabelColor = colors.textSecondary
     )
@@ -1283,7 +1283,7 @@ private fun AiMapArtStudioDialog(
                     .fillMaxWidth()
                     .height(145.dp)
                     .clip(RoundedCornerShape(16.dp))
-                    .background(colors.bgElevated),
+                    .background(colors.surfaceRaised),
                 contentAlignment = Alignment.Center
             ) {
                 val bmp = capturedBitmap

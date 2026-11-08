@@ -224,7 +224,7 @@ class ProscenicProtocolTest {
             heightMm = 900,
             rotationDeg = 90f,
             topDownPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
-            providerUsed = com.proscenic.m7.ai.ByokProvider.GEMINI,
+            providerUsed = "Gemini",
             aiDescription = "Top-down navy sofa"
         )
         val roundTrip = com.proscenic.m7.ai.AiMapArtItem.fromJson(artItem.toJson())
@@ -234,7 +234,7 @@ class ProscenicProtocolTest {
         assertEquals(210, roundTrip.widthCm)
         assertEquals(90, roundTrip.heightCm)
         assertEquals(90f, roundTrip.rotationDeg, 0.01f)
-        assertEquals(com.proscenic.m7.ai.ByokProvider.GEMINI, roundTrip.providerUsed)
+        assertEquals("Gemini", roundTrip.providerUsed)
     }
 }
 
