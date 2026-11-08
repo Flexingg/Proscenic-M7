@@ -213,4 +213,28 @@ class ProscenicProtocolTest {
         assertTrue(shutdownStatus.isSleepOrShutdown)
         assertEquals("Sleep Mode (shutdown)", shutdownStatus.modeDisplayLabel)
     }
+
+    @Test
+    fun `AiMapArtItem and MapExportManager serializeFullMapBundleJson round-trip cleanly`() {
+        val artItem = com.proscenic.m7.ai.AiMapArtItem(
+            id = "art-sofa-1",
+            label = "Navy L-Sofa",
+            centerMm = PointMm(1200, -450),
+            widthMm = 2100,
+            heightMm = 900,
+            rotationDeg = 90f,
+            topDownPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+            providerUsed = com.proscenic.m7.ai.ByokProvider.GEMINI,
+            aiDescription = "Top-down navy sofa"
+        )
+        val roundTrip = com.proscenic.m7.ai.AiMapArtItem.fromJson(artItem.toJson())
+        assertEquals("art-sofa-1", roundTrip.id)
+        assertEquals("Navy L-Sofa", roundTrip.label)
+        assertEquals(PointMm(1200, -450), roundTrip.centerMm)
+        assertEquals(210, roundTrip.widthCm)
+        assertEquals(90, roundTrip.heightCm)
+        assertEquals(90f, roundTrip.rotationDeg, 0.01f)
+        assertEquals(com.proscenic.m7.ai.ByokProvider.GEMINI, roundTrip.providerUsed)
+    }
 }
+

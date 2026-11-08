@@ -1,6 +1,11 @@
 package com.proscenic.m7.ui
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
@@ -14,20 +19,30 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Gamepad
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.RotateLeft
 import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material.icons.filled.Stop
@@ -36,6 +51,8 @@ import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -46,13 +63,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import com.proscenic.m7.ai.ByokProvider
 import com.proscenic.m7.protocol.SuctionLevel
 import com.proscenic.m7.protocol.ZoneKind
 import com.proscenic.m7.ui.components.CircularGlassIconButton
@@ -76,9 +98,9 @@ import com.proscenic.m7.ui.theme.progressiveEdgeScrim
  *
  * - Displays ONLY real telemetry and real `infoType: 20002` LZ4 floor maps uploaded by the physical
  *   Proscenic M7 vacuum over TCP `:8081` and HTTP `:8080`.
- * - When no map has been uploaded yet, displays a live connection diagnostic card showing whether
- *   the robot TCP socket is connected, its IP address, serial number, heartbeat count, and buttons
- *   to test the connection (**Test Beep 3010**, **Request Live Map 20002**, or **Open Pairing**).
+ * - Supports full multi-touch pinch-zoom & pan, 1-tap high-res Map Download (PNG + JSON), and
+ *   BYOK AI Map Art (Gemini / Claude / OpenAI) that turns a real-world photo into a scaled top-down
+ *   orthographic floor-plan sprite.
  */
 @Composable
 fun MapDashboardScreen(
@@ -93,6 +115,7 @@ fun MapDashboardScreen(
     val tokens = LivingFlowTheme.tokens
     val colors = tokens.colors
     val view = LocalView.current
+    val context = LocalContext.current
 
     var sheetExpanded by remember { mutableStateOf(false) }
 
@@ -112,6 +135,8 @@ fun MapDashboardScreen(
                 roomNames = uiState.roomNames,
                 selectedRoomLabels = uiState.selectedRoomLabels,
                 selectedZoneIds = uiState.selectedZoneIds,
+                aiArtItems = uiState.aiArtItems,
+                selectedAiArtId = uiState.selectedAiArtId,
                 interactionMode = uiState.mapInteractionMode,
                 activeZoneDrawKind = uiState.activeZoneDrawKind,
                 placedSpotTargetMm = uiState.placedSpotTargetMm,
@@ -121,6 +146,9 @@ fun MapDashboardScreen(
                 onZoneDrawn = { p1, p2 -> viewModel.addDrawnZone(p1, p2) },
                 onSpotMoved = { viewModel.setPlacedSpotTarget(it) },
                 onRoomSplitLineDrawn = { p1, p2 -> viewModel.splitSelectedRoom(p1, p2) },
+                onAiArtTapped = { viewModel.selectAiArtItem(it) },
+                onAiArtMoved = { id, pos -> viewModel.moveAiArtItem(id, pos) },
+                onAiBoxDrawn = { p1, p2 -> viewModel.onAiFootprintBoxDrawn(p1, p2) },
                 modifier = Modifier.fillMaxSize()
             )
         } else {
@@ -286,19 +314,27 @@ fun MapDashboardScreen(
                     }
                 }
 
-                // Quick Circular Glass Buttons (Locate Beep & Manual D-Pad)
+                // Quick Circular Glass Buttons (Download Map, Locate Beep & Manual D-Pad)
+                CircularGlassIconButton(
+                    icon = Icons.Default.Download,
+                    contentDescription = "Download 2D floor map (PNG & JSON)",
+                    isActive = realMap != null,
+                    accentOverride = colors.accentCyan,
+                    size = 46.dp,
+                    onClick = { viewModel.downloadMapToDevice(context) }
+                )
                 CircularGlassIconButton(
                     icon = Icons.Default.VolumeUp,
                     contentDescription = "Locate vacuum beep (test control)",
                     isActive = uiState.robotSocketConnected,
-                    size = 48.dp,
+                    size = 46.dp,
                     onClick = { viewModel.locateRobotBeep() }
                 )
                 CircularGlassIconButton(
                     icon = Icons.Default.Gamepad,
                     contentDescription = "Open manual D-pad remote",
                     isActive = showRemoteModal,
-                    size = 48.dp,
+                    size = 46.dp,
                     onClick = onOpenRemoteModal
                 )
             }
@@ -597,6 +633,13 @@ fun MapDashboardScreen(
             onDismiss = onDismissRemoteModal
         )
     }
+
+    if (uiState.showAiArtStudioModal) {
+        AiMapArtStudioDialog(
+            uiState = uiState,
+            viewModel = viewModel
+        )
+    }
 }
 
 @Composable
@@ -629,6 +672,7 @@ private fun MapContextualSubIsland(
 ) {
     val tokens = LivingFlowTheme.tokens
     val colors = tokens.colors
+    val context = LocalContext.current
 
     Box(
         modifier = Modifier
@@ -784,6 +828,122 @@ private fun MapContextualSubIsland(
                                                 pressScale = 0.88f,
                                                 onClick = { viewModel.deleteZone(reg.id) }
                                             )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            MapInteractionMode.AI_MAP_ART -> {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        LivingFlowPillButton(
+                            text = "Snap Object Photo (AI)",
+                            icon = Icons.Default.CameraAlt,
+                            variant = FluidButtonVariant.PRIMARY,
+                            onClick = { viewModel.openAiArtStudioModal() }
+                        )
+                        LivingFlowPillButton(
+                            text = "Download Map",
+                            icon = Icons.Default.Download,
+                            variant = FluidButtonVariant.TONAL_ACCENT,
+                            onClick = { viewModel.downloadMapToDevice(context) }
+                        )
+                        Text(
+                            text = "Drag a box on the map where the object sits, or tap an object to move/rotate",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.textSecondary
+                        )
+                    }
+
+                    val selectedItem = uiState.aiArtItems.firstOrNull { it.id == uiState.selectedAiArtId }
+                    if (selectedItem != null) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Selected: ${selectedItem.label} (${selectedItem.widthCm}×${selectedItem.heightCm}cm)",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = colors.accentCyan,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            LivingFlowPillButton(
+                                text = "↺ -15°",
+                                variant = FluidButtonVariant.SECONDARY_GLASS,
+                                onClick = { viewModel.rotateSelectedAiArt(-15f) }
+                            )
+                            LivingFlowPillButton(
+                                text = "↻ +15°",
+                                variant = FluidButtonVariant.SECONDARY_GLASS,
+                                onClick = { viewModel.rotateSelectedAiArt(15f) }
+                            )
+                            LivingFlowPillButton(
+                                text = "90°",
+                                variant = FluidButtonVariant.SECONDARY_GLASS,
+                                onClick = { viewModel.rotateSelectedAiArt(90f) }
+                            )
+                            LivingFlowPillButton(
+                                text = "Scale -",
+                                icon = Icons.Default.Remove,
+                                variant = FluidButtonVariant.SECONDARY_GLASS,
+                                onClick = { viewModel.resizeSelectedAiArt(0.9f) }
+                            )
+                            LivingFlowPillButton(
+                                text = "Scale +",
+                                icon = Icons.Default.Add,
+                                variant = FluidButtonVariant.SECONDARY_GLASS,
+                                onClick = { viewModel.resizeSelectedAiArt(1.1f) }
+                            )
+                            LivingFlowPillButton(
+                                text = "Delete",
+                                icon = Icons.Default.Delete,
+                                variant = FluidButtonVariant.DANGER,
+                                onClick = { viewModel.deleteSelectedAiArt() }
+                            )
+                        }
+                    } else if (uiState.aiArtItems.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Placed Objects (${uiState.aiArtItems.size}):",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = colors.textSecondary
+                            )
+                            uiState.aiArtItems.forEach { item ->
+                                Box(
+                                    modifier = Modifier
+                                        .livingFlowGlass(
+                                            level = GlassMaterialLevel.THIN,
+                                            cornerRadius = tokens.radii.full,
+                                            isActive = false
+                                        )
+                                        .livingFlowPress(
+                                            pressScale = 0.94f,
+                                            onClick = { viewModel.selectAiArtItem(item.id) }
+                                        )
+                                        .padding(horizontal = 12.dp, vertical = 5.dp)
+                                ) {
+                                    Text(
+                                        text = "${item.label} (${item.widthCm}×${item.heightCm}cm)",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = colors.textPrimary
                                     )
                                 }
                             }
@@ -994,3 +1154,334 @@ private fun RemoteControlGlassDialog(
         }
     }
 }
+
+private data class ObjectPreset(
+    val label: String,
+    val widthCm: Int,
+    val depthCm: Int
+)
+
+private val QUICK_OBJECT_PRESETS = listOf(
+    ObjectPreset("Sofa", 210, 90),
+    ObjectPreset("Queen Bed", 200, 150),
+    ObjectPreset("Dining Table", 180, 90),
+    ObjectPreset("Coffee Table", 120, 60),
+    ObjectPreset("Area Rug", 240, 170),
+    ObjectPreset("Office Desk", 140, 75),
+    ObjectPreset("Plant Pot", 45, 45),
+    ObjectPreset("Pet Bed", 75, 60),
+    ObjectPreset("TV Stand", 160, 45)
+)
+
+@Composable
+private fun AiMapArtStudioDialog(
+    uiState: VacuumUiState,
+    viewModel: VacuumViewModel
+) {
+    val tokens = LivingFlowTheme.tokens
+    val colors = tokens.colors
+    val context = LocalContext.current
+
+    var capturedBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var objectLabel by remember { mutableStateOf("Sofa") }
+    var widthCmText by remember(uiState.pendingAiBoxWidthCm) {
+        mutableStateOf(uiState.pendingAiBoxWidthCm.toString())
+    }
+    var depthCmText by remember(uiState.pendingAiBoxDepthCm) {
+        mutableStateOf(uiState.pendingAiBoxDepthCm.toString())
+    }
+    var rotationDeg by remember { mutableStateOf(0f) }
+
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bmp ->
+        if (bmp != null) {
+            capturedBitmap = bmp
+        }
+    }
+
+    val galleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    BitmapFactory.decodeStream(stream)
+                }
+            }.getOrNull()?.let { bmp ->
+                capturedBitmap = bmp
+            }
+        }
+    }
+
+    val activeProvider = uiState.byokProvider
+    val activeKey = when (activeProvider) {
+        ByokProvider.GEMINI -> uiState.geminiApiKey
+        ByokProvider.CLAUDE -> uiState.claudeApiKey
+        ByokProvider.OPENAI -> uiState.openAiApiKey
+    }
+
+    val textFieldColors = OutlinedTextFieldDefaults.colors(
+        focusedTextColor = colors.textPrimary,
+        unfocusedTextColor = colors.textPrimary,
+        focusedBorderColor = colors.accentCyan,
+        unfocusedBorderColor = colors.strokeGlassRim,
+        focusedLabelColor = colors.accentCyan,
+        unfocusedLabelColor = colors.textSecondary
+    )
+
+    Dialog(onDismissRequest = {
+        if (!uiState.aiGenerationInProgress) {
+            viewModel.dismissAiArtStudioModal()
+        }
+    }) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .livingFlowGlass(
+                    level = GlassMaterialLevel.THICK,
+                    cornerRadius = tokens.radii.xl,
+                    isActive = true
+                )
+                .padding(20.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "AI Map Art Studio (BYOK)",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = colors.textPrimary
+                    )
+                    Text(
+                        text = "Snap a real-world object → AI creates a scaled top-down sprite on your floor map",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.textSecondary
+                    )
+                }
+                CircularGlassIconButton(
+                    icon = Icons.Default.Close,
+                    contentDescription = "Close AI Map Art Studio",
+                    size = 38.dp,
+                    onClick = {
+                        if (!uiState.aiGenerationInProgress) {
+                            viewModel.dismissAiArtStudioModal()
+                        }
+                    }
+                )
+            }
+
+            // 1. Real-World Object Photo Capture / Gallery Picker
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(145.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(colors.bgElevated),
+                contentAlignment = Alignment.Center
+            ) {
+                val bmp = capturedBitmap
+                if (bmp != null) {
+                    Image(
+                        bitmap = bmp.asImageBitmap(),
+                        contentDescription = "Captured real-world object",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.padding(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CameraAlt,
+                            contentDescription = null,
+                            tint = colors.accentCyan,
+                            modifier = Modifier.size(32.dp)
+                        )
+                        Text(
+                            text = "Take a photo of your real-world furniture/object so AI matches its exact colors, texture & shape!",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.textSecondary,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                LivingFlowPillButton(
+                    text = if (capturedBitmap == null) "Take Photo" else "Retake Photo",
+                    icon = Icons.Default.CameraAlt,
+                    variant = FluidButtonVariant.PRIMARY,
+                    onClick = { cameraLauncher.launch(null) },
+                    modifier = Modifier.weight(1f)
+                )
+                LivingFlowPillButton(
+                    text = "Pick Photo",
+                    icon = Icons.Default.Image,
+                    variant = FluidButtonVariant.SECONDARY_GLASS,
+                    onClick = { galleryLauncher.launch("image/*") },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            // 2. Quick Object Presets
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                QUICK_OBJECT_PRESETS.forEach { preset ->
+                    val selected = objectLabel.equals(preset.label, ignoreCase = true)
+                    Box(
+                        modifier = Modifier
+                            .livingFlowGlass(
+                                level = GlassMaterialLevel.THIN,
+                                cornerRadius = tokens.radii.full,
+                                isActive = selected
+                            )
+                            .livingFlowPress(
+                                pressScale = 0.94f,
+                                onClick = {
+                                    objectLabel = preset.label
+                                    widthCmText = preset.widthCm.toString()
+                                    depthCmText = preset.depthCm.toString()
+                                }
+                            )
+                            .padding(horizontal = 10.dp, vertical = 5.dp)
+                    ) {
+                        Text(
+                            text = "${preset.label} (${preset.widthCm}×${preset.depthCm}cm)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (selected) colors.accentCyan else colors.textPrimary
+                        )
+                    }
+                }
+            }
+
+            // 3. Object Label & Real-World Footprint Dimensions (cm)
+            OutlinedTextField(
+                value = objectLabel,
+                onValueChange = { objectLabel = it },
+                label = { Text("Object Name / Description (e.g. Navy L-Sofa, Oak Dining Table)") },
+                singleLine = true,
+                colors = textFieldColors,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = widthCmText,
+                    onValueChange = { widthCmText = it.filter { c -> c.isDigit() } },
+                    label = { Text("Width (cm)") },
+                    singleLine = true,
+                    colors = textFieldColors,
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedTextField(
+                    value = depthCmText,
+                    onValueChange = { depthCmText = it.filter { c -> c.isDigit() } },
+                    label = { Text("Depth (cm)") },
+                    singleLine = true,
+                    colors = textFieldColors,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            // Rotation selector
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Map Orientation: ${rotationDeg.toInt()}°",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = colors.textPrimary
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(0f, 90f, 180f, 270f).forEach { deg ->
+                        LivingFlowPillButton(
+                            text = "${deg.toInt()}°",
+                            variant = if (rotationDeg == deg) FluidButtonVariant.TONAL_ACCENT else FluidButtonVariant.SECONDARY_GLASS,
+                            onClick = { rotationDeg = deg }
+                        )
+                    }
+                }
+            }
+
+            // 4. BYOK Provider & API Key
+            Text(
+                text = "BYOK AI Provider (Gemini / Claude / OpenAI)",
+                style = MaterialTheme.typography.labelLarge,
+                color = colors.textPrimary
+            )
+            LivingFlowSegmentedControl(
+                items = ByokProvider.entries,
+                selectedItem = activeProvider,
+                labelProvider = { it.displayName.substringBefore(" ") },
+                onSelect = { viewModel.setByokProvider(it) },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            OutlinedTextField(
+                value = activeKey,
+                onValueChange = { viewModel.setByokApiKey(activeProvider, it) },
+                label = { Text("${activeProvider.displayName} API Key (${activeProvider.modelHint})") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                colors = textFieldColors,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            if (!uiState.aiGenerationStatus.isNullOrBlank()) {
+                Text(
+                    text = uiState.aiGenerationStatus,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (uiState.aiGenerationStatus.startsWith("Error")) colors.danger else colors.accentCyan
+                )
+            }
+
+            // 5. Generate Action Button
+            LivingFlowPillButton(
+                text = if (uiState.aiGenerationInProgress) {
+                    "Generating Top-Down Art..."
+                } else {
+                    "Generate Top-Down Map Art"
+                },
+                icon = Icons.Default.AutoAwesome,
+                variant = FluidButtonVariant.PRIMARY,
+                enabled = !uiState.aiGenerationInProgress,
+                onClick = {
+                    val wCm = widthCmText.toIntOrNull() ?: uiState.pendingAiBoxWidthCm
+                    val dCm = depthCmText.toIntOrNull() ?: uiState.pendingAiBoxDepthCm
+                    viewModel.generateAiMapArt(
+                        photoBitmap = capturedBitmap,
+                        objectLabel = objectLabel,
+                        widthCm = wCm,
+                        depthCm = dCm,
+                        rotationDeg = rotationDeg
+                    )
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+

@@ -1,7 +1,13 @@
 package com.proscenic.m7.ui
 
+import android.content.Context
+import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.proscenic.m7.ai.AiMapArtEngine
+import com.proscenic.m7.ai.AiMapArtItem
+import com.proscenic.m7.ai.ByokProvider
+import com.proscenic.m7.export.MapExportManager
 import com.proscenic.m7.protocol.CleanPath
 import com.proscenic.m7.protocol.MapRegion
 import com.proscenic.m7.protocol.PointMm
@@ -22,10 +28,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.UUID
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 enum class ConnectionMode(val label: String) {
     LOCAL_SERVER("On-Phone Server (:8080/:8081)"),
@@ -35,6 +45,7 @@ enum class ConnectionMode(val label: String) {
 enum class MapInteractionMode(val label: String) {
     SELECT_ROOMS("Rooms"),
     EDIT_ZONES("Zones & No-Go"),
+    AI_MAP_ART("AI Map Art"),
     PLACED_SPOT("Spot Target"),
     SPLIT_MERGE("Split / Merge")
 }
@@ -67,6 +78,19 @@ data class VacuumUiState(
     val placedSpotDeepClean: Boolean = false,
     val yShapedMopEnabled: Boolean = false,
     val mergeFirstRoomLabel: Int? = null,
+    // AI Map Art & BYOK State
+    val aiArtItems: List<AiMapArtItem> = emptyList(),
+    val selectedAiArtId: String? = null,
+    val showAiArtStudioModal: Boolean = false,
+    val pendingAiBoxCenterMm: PointMm = PointMm(0, 0),
+    val pendingAiBoxWidthCm: Int = 180,
+    val pendingAiBoxDepthCm: Int = 90,
+    val aiGenerationInProgress: Boolean = false,
+    val aiGenerationStatus: String? = null,
+    val byokProvider: ByokProvider = ByokProvider.GEMINI,
+    val geminiApiKey: String = "",
+    val claudeApiKey: String = "",
+    val openAiApiKey: String = "",
     val schedules: List<ScheduleEntry> = emptyList(),
     val quietHours: QuietHoursConfig = QuietHoursConfig(enabled = false, startHour = 23, startMinute = 0, endHour = 7, endMinute = 0),
     val rehomeSteps: List<RehomeClient.StepLog> = emptyList(),
@@ -86,10 +110,10 @@ data class VacuumUiState(
 
 class VacuumViewModel : ViewModel() {
 
-    private val prefsFile: File = File(
-        System.getProperty("java.io.tmpdir") ?: "/tmp",
-        "proscenic_m7_pairing_prefs.json"
-    )
+    private val storageDir: File = File(System.getProperty("java.io.tmpdir") ?: "/tmp")
+
+    private val prefsFile: File = File(storageDir, "proscenic_m7_pairing_prefs.json")
+    private val cachedMapFile: File = File(storageDir, "proscenic_m7_cached_map.json")
 
     private val _uiState = MutableStateFlow(VacuumUiState())
     val uiState: StateFlow<VacuumUiState> = _uiState.asStateFlow()
@@ -112,7 +136,7 @@ class VacuumViewModel : ViewModel() {
 
     fun updateSavedWifiCredentials(ssid: String, password: String) {
         _uiState.update { it.copy(savedWifiSsid = ssid, savedWifiPassword = password) }
-        persistPairingPrefs(ssid, password, _uiState.value.lastDiscoveredRobotLanIp)
+        persistPairingPrefs()
     }
 
     private fun loadPairingPrefs() {
@@ -122,26 +146,94 @@ class VacuumViewModel : ViewModel() {
                 val ssid = json.optString("wifiSsid", "Robots").ifBlank { "Robots" }
                 val pwd = json.optString("wifiPassword", "")
                 val lastIp = json.optString("lastRobotLanIp", "").ifBlank { null }
+                val providerStr = json.optString("byokProvider", ByokProvider.GEMINI.name)
+                val provider = runCatching { ByokProvider.valueOf(providerStr) }.getOrDefault(ByokProvider.GEMINI)
+                val geminiKey = json.optString("geminiApiKey", "")
+                val claudeKey = json.optString("claudeApiKey", "")
+                val openAiKey = json.optString("openAiApiKey", "")
                 _uiState.update {
                     it.copy(
                         savedWifiSsid = ssid,
                         savedWifiPassword = pwd,
-                        lastDiscoveredRobotLanIp = lastIp
+                        lastDiscoveredRobotLanIp = lastIp,
+                        byokProvider = provider,
+                        geminiApiKey = geminiKey,
+                        claudeApiKey = claudeKey,
+                        openAiApiKey = openAiKey
                     )
                 }
             }
         }
     }
 
-    private fun persistPairingPrefs(ssid: String, password: String, lastRobotIp: String?) {
+    private fun persistPairingPrefs() {
+        val s = _uiState.value
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 val json = JSONObject().apply {
-                    put("wifiSsid", ssid)
-                    put("wifiPassword", password)
-                    if (!lastRobotIp.isNullOrBlank()) put("lastRobotLanIp", lastRobotIp)
+                    put("wifiSsid", s.savedWifiSsid)
+                    put("wifiPassword", s.savedWifiPassword)
+                    if (!s.lastDiscoveredRobotLanIp.isNullOrBlank()) put("lastRobotLanIp", s.lastDiscoveredRobotLanIp)
+                    put("byokProvider", s.byokProvider.name)
+                    put("geminiApiKey", s.geminiApiKey)
+                    put("claudeApiKey", s.claudeApiKey)
+                    put("openAiApiKey", s.openAiApiKey)
                 }
                 prefsFile.writeText(json.toString(), Charsets.UTF_8)
+            }
+        }
+    }
+
+    private fun loadCachedMapAndArt() {
+        runCatching {
+            if (cachedMapFile.exists()) {
+                val root = JSONObject(cachedMapFile.readText(Charsets.UTF_8))
+                val parsedMap = root.optJSONObject("map20002")?.let { ProscenicProtocol.parseMapUpload20002(it) }
+                val namesObj = root.optJSONObject("roomNames")
+                val namesMap = mutableMapOf<Int, String>()
+                if (namesObj != null) {
+                    val keys = namesObj.keys()
+                    while (keys.hasNext()) {
+                        val k = keys.next()
+                        k.toIntOrNull()?.let { id -> namesMap[id] = namesObj.optString(k, "Room $id") }
+                    }
+                }
+                val artArr = root.optJSONArray("aiMapArtItems")
+                val artItems = mutableListOf<AiMapArtItem>()
+                if (artArr != null) {
+                    for (i in 0 until artArr.length()) {
+                        artArr.optJSONObject(i)?.let { obj ->
+                            runCatching { AiMapArtItem.fromJson(obj) }.getOrNull()?.let { artItems.add(it) }
+                        }
+                    }
+                }
+                _uiState.update { state ->
+                    val mergedNames = if (parsedMap != null) {
+                        parsedMap.roomLabels.associateWith { id -> namesMap[id] ?: "Room $id" }
+                    } else namesMap
+                    state.copy(
+                        map = parsedMap ?: state.map,
+                        regions = parsedMap?.areas ?: state.regions,
+                        roomNames = mergedNames.ifEmpty { state.roomNames },
+                        aiArtItems = artItems
+                    )
+                }
+            }
+        }
+    }
+
+    private fun persistCachedMapAndArt() {
+        val s = _uiState.value
+        val currentMap = s.map ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val bundle = MapExportManager.serializeFullMapBundleJson(
+                    map = currentMap,
+                    regions = s.regions,
+                    roomNames = s.roomNames,
+                    aiArtItems = s.aiArtItems
+                )
+                cachedMapFile.writeText(bundle.toString(), Charsets.UTF_8)
             }
         }
     }
@@ -175,6 +267,7 @@ class VacuumViewModel : ViewModel() {
                     lastActionBanner = "Received 20002 floor map (${newMap.width}x${newMap.height}, ${newMap.roomLabels.size} rooms)"
                 )
             }
+            persistCachedMapAndArt()
         },
         onPathReceived = { newPath ->
             _uiState.update { it.copy(path = newPath) }
@@ -187,6 +280,7 @@ class VacuumViewModel : ViewModel() {
                     lastActionBanner = "Received ${zones.size} saved zone(s) from robot (21004)"
                 )
             }
+            persistCachedMapAndArt()
         },
         onSchedulesReceived = { scheds ->
             _uiState.update {
@@ -222,6 +316,7 @@ class VacuumViewModel : ViewModel() {
 
     init {
         loadPairingPrefs()
+        loadCachedMapAndArt()
         startEmbeddedServer()
         startLanIpMonitor()
     }
@@ -252,15 +347,14 @@ class VacuumViewModel : ViewModel() {
         viewModelScope.launch {
             localServer.connectedRobotAddress.collect { addr ->
                 val ipOnly = addr?.substringBefore(':')?.takeIf { it.isNotBlank() }
-                if (ipOnly != null) {
-                    val s = _uiState.value
-                    persistPairingPrefs(s.savedWifiSsid, s.savedWifiPassword, ipOnly)
-                }
                 _uiState.update {
                     it.copy(
                         connectedRobotAddress = addr,
                         lastDiscoveredRobotLanIp = ipOnly ?: it.lastDiscoveredRobotLanIp
                     )
+                }
+                if (ipOnly != null) {
+                    persistPairingPrefs()
                 }
             }
         }
@@ -713,6 +807,232 @@ class VacuumViewModel : ViewModel() {
     }
 
     // =========================================================================
+    // AI Map Art (BYOK Claude / Gemini / OpenAI) & Download Map
+    // =========================================================================
+
+    fun setByokProvider(provider: ByokProvider) {
+        _uiState.update { it.copy(byokProvider = provider) }
+        persistPairingPrefs()
+    }
+
+    fun setByokApiKey(provider: ByokProvider, key: String) {
+        val trimmed = key.trim()
+        _uiState.update { state ->
+            when (provider) {
+                ByokProvider.GEMINI -> state.copy(geminiApiKey = trimmed)
+                ByokProvider.CLAUDE -> state.copy(claudeApiKey = trimmed)
+                ByokProvider.OPENAI -> state.copy(openAiApiKey = trimmed)
+            }
+        }
+        persistPairingPrefs()
+    }
+
+    fun currentApiKeyFor(provider: ByokProvider): String {
+        val s = _uiState.value
+        return when (provider) {
+            ByokProvider.GEMINI -> s.geminiApiKey
+            ByokProvider.CLAUDE -> s.claudeApiKey
+            ByokProvider.OPENAI -> s.openAiApiKey
+        }
+    }
+
+    fun onAiFootprintBoxDrawn(p1Mm: PointMm, p2Mm: PointMm) {
+        val center = PointMm(
+            xMm = (p1Mm.xMm + p2Mm.xMm) / 2,
+            yMm = (p1Mm.yMm + p2Mm.yMm) / 2
+        )
+        val wCm = (abs(p2Mm.xMm - p1Mm.xMm) / 10).coerceIn(20, 800)
+        val dCm = (abs(p2Mm.yMm - p1Mm.yMm) / 10).coerceIn(20, 800)
+        _uiState.update {
+            it.copy(
+                pendingAiBoxCenterMm = center,
+                pendingAiBoxWidthCm = wCm,
+                pendingAiBoxDepthCm = dCm,
+                showAiArtStudioModal = true,
+                aiGenerationStatus = "Selected ${wCm}cm × ${dCm}cm footprint on map at (${center.xMm}, ${center.yMm}) mm"
+            )
+        }
+    }
+
+    fun openAiArtStudioModal() {
+        _uiState.update {
+            it.copy(
+                showAiArtStudioModal = true,
+                aiGenerationStatus = null
+            )
+        }
+    }
+
+    fun dismissAiArtStudioModal() {
+        _uiState.update {
+            it.copy(
+                showAiArtStudioModal = false,
+                aiGenerationStatus = null
+            )
+        }
+    }
+
+    fun selectAiArtItem(id: String?) {
+        _uiState.update { state ->
+            val next = if (state.selectedAiArtId == id) null else id
+            state.copy(selectedAiArtId = next)
+        }
+    }
+
+    fun moveAiArtItem(id: String, centerMm: PointMm) {
+        _uiState.update { state ->
+            val updated = state.aiArtItems.map { item ->
+                if (item.id == id) item.copy(centerMm = centerMm) else item
+            }
+            state.copy(
+                aiArtItems = updated,
+                selectedAiArtId = id
+            )
+        }
+        persistCachedMapAndArt()
+    }
+
+    fun rotateSelectedAiArt(deltaDeg: Float) {
+        val id = _uiState.value.selectedAiArtId ?: return
+        _uiState.update { state ->
+            val updated = state.aiArtItems.map { item ->
+                if (item.id == id) {
+                    val nextRot = ((item.rotationDeg + deltaDeg) % 360f + 360f) % 360f
+                    item.copy(rotationDeg = nextRot)
+                } else item
+            }
+            state.copy(aiArtItems = updated)
+        }
+        persistCachedMapAndArt()
+    }
+
+    fun resizeSelectedAiArt(scaleFactor: Float) {
+        val id = _uiState.value.selectedAiArtId ?: return
+        _uiState.update { state ->
+            val updated = state.aiArtItems.map { item ->
+                if (item.id == id) {
+                    val newW = (item.widthMm * scaleFactor).roundToInt().coerceIn(200, 9000)
+                    val newH = (item.heightMm * scaleFactor).roundToInt().coerceIn(200, 9000)
+                    item.copy(widthMm = newW, heightMm = newH)
+                } else item
+            }
+            state.copy(aiArtItems = updated)
+        }
+        persistCachedMapAndArt()
+    }
+
+    fun deleteSelectedAiArt() {
+        val id = _uiState.value.selectedAiArtId ?: return
+        _uiState.update { state ->
+            state.copy(
+                aiArtItems = state.aiArtItems.filterNot { it.id == id },
+                selectedAiArtId = null,
+                lastActionBanner = "Removed AI Map Art object from floor map"
+            )
+        }
+        persistCachedMapAndArt()
+    }
+
+    fun generateAiMapArt(
+        photoBitmap: Bitmap?,
+        objectLabel: String,
+        widthCm: Int,
+        depthCm: Int,
+        rotationDeg: Float
+    ) {
+        if (_uiState.value.aiGenerationInProgress) return
+        val state = _uiState.value
+        val provider = state.byokProvider
+        val apiKey = currentApiKeyFor(provider)
+        val cleanLabel = objectLabel.ifBlank { "Furniture" }.trim()
+        val safeW = widthCm.coerceIn(20, 800)
+        val safeD = depthCm.coerceIn(20, 800)
+
+        _uiState.update {
+            it.copy(
+                aiGenerationInProgress = true,
+                aiGenerationStatus = "Analyzing photo & generating top-down '${cleanLabel}' (${safeW}×${safeD}cm) with ${provider.displayName}..."
+            )
+        }
+
+        viewModelScope.launch {
+            val result = AiMapArtEngine.generateTopDownObjectArt(
+                provider = provider,
+                apiKey = apiKey,
+                sourcePhoto = photoBitmap,
+                objectLabel = cleanLabel,
+                widthCm = safeW,
+                depthCm = safeD
+            )
+
+            result.fold(
+                onSuccess = { gen ->
+                    val newItem = AiMapArtItem(
+                        id = UUID.randomUUID().toString(),
+                        label = cleanLabel,
+                        centerMm = _uiState.value.pendingAiBoxCenterMm,
+                        widthMm = safeW * 10,
+                        heightMm = safeD * 10,
+                        rotationDeg = rotationDeg,
+                        topDownPngBase64 = gen.topDownPngBase64,
+                        sourcePhotoThumbBase64 = gen.sourceThumbBase64,
+                        providerUsed = provider,
+                        aiDescription = gen.aiSummary
+                    )
+                    _uiState.update { s ->
+                        s.copy(
+                            aiArtItems = s.aiArtItems + newItem,
+                            selectedAiArtId = newItem.id,
+                            mapInteractionMode = MapInteractionMode.AI_MAP_ART,
+                            aiGenerationInProgress = false,
+                            showAiArtStudioModal = false,
+                            aiGenerationStatus = null,
+                            lastActionBanner = "Placed top-down AI Map Art '${cleanLabel}' (${safeW}×${safeD}cm) via ${provider.displayName}!"
+                        )
+                    }
+                    persistCachedMapAndArt()
+                },
+                onFailure = { err ->
+                    _uiState.update { s ->
+                        s.copy(
+                            aiGenerationInProgress = false,
+                            aiGenerationStatus = "Error: ${err.message ?: "Failed to generate top-down art"}"
+                        )
+                    }
+                }
+            )
+        }
+    }
+
+    fun downloadMapToDevice(context: Context) {
+        val state = _uiState.value
+        val currentMap = state.map
+        if (currentMap == null) {
+            _uiState.update {
+                it.copy(lastActionBanner = "No 2D floor map received yet — connect to robot or request map first")
+            }
+            return
+        }
+        _uiState.update {
+            it.copy(lastActionBanner = "Rendering high-res 2D floor map PNG + JSON bundle to device...")
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val res = MapExportManager.downloadMapPngAndJson(
+                context = context,
+                map = currentMap,
+                status = state.status,
+                path = state.path,
+                regions = state.regions,
+                roomNames = state.roomNames,
+                aiArtItems = state.aiArtItems
+            )
+            _uiState.update {
+                it.copy(lastActionBanner = res.message)
+            }
+        }
+    }
+
+    // =========================================================================
     // LAN UDP 7913 Re-Pointing & SoftAP UDP 7913 Re-homing Wizard
     // =========================================================================
 
@@ -748,9 +1068,6 @@ class VacuumViewModel : ViewModel() {
                     _uiState.update { s -> s.copy(rehomeSteps = s.rehomeSteps + stepLog) }
                 }
             )
-            if (!result.discoveredRobotIp.isNullOrBlank()) {
-                persistPairingPrefs(wifiSsid, wifiPassword, result.discoveredRobotIp)
-            }
             _uiState.update { s ->
                 s.copy(
                     rehomeInProgress = false,
@@ -762,6 +1079,9 @@ class VacuumViewModel : ViewModel() {
                         "Error: ${result.errorMessage}"
                     }
                 )
+            }
+            if (!result.discoveredRobotIp.isNullOrBlank()) {
+                persistPairingPrefs()
             }
         }
     }
@@ -798,9 +1118,6 @@ class VacuumViewModel : ViewModel() {
                     _uiState.update { s -> s.copy(rehomeSteps = s.rehomeSteps + stepLog) }
                 }
             )
-            if (!result.discoveredRobotIp.isNullOrBlank() && result.discoveredRobotIp != "192.168.78.1") {
-                persistPairingPrefs(wifiSsid, wifiPassword, result.discoveredRobotIp)
-            }
             _uiState.update { s ->
                 s.copy(
                     rehomeInProgress = false,
@@ -812,6 +1129,9 @@ class VacuumViewModel : ViewModel() {
                         "Error: ${result.errorMessage}"
                     }
                 )
+            }
+            if (!result.discoveredRobotIp.isNullOrBlank() && result.discoveredRobotIp != "192.168.78.1") {
+                persistPairingPrefs()
             }
         }
     }
