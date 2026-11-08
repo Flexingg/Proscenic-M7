@@ -1,0 +1,20 @@
+# Gradle / Android build output
+.gradle/
+build/
+app/build/
+local.properties
+.cxx/
+.idea/
+*.iml
+
+# Secrets — never committed
+keystore.properties
+*.jks
+*.keystore
+
+# APKs are ignored by default, EXCEPT the shipped release artifact in dist/.
+*.apk
+!dist/*.apk
+
+# Kotlin incremental-compile state (created by the Gradle Kotlin plugin)
+.kotlin/

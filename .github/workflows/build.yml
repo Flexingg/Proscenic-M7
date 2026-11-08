@@ -1,0 +1,89 @@
+name: Build & Attach APK to Releases
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    tags:
+      - "v*"
+      - "[0-9]+.[0-9]+.[0-9]*"
+  release:
+    types: [ published, created, edited ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Optional release tag to create/upload APK to (e.g. 0.0.1 or v0.0.1)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Run Protocol Unit Tests
+        run: ./gradlew testDebugUnitTest
+
+      - name: Assemble Debug & Signed Release APKs
+        run: ./gradlew assembleDebug assembleRelease
+
+      - name: Prepare Versioned APK Names
+        id: prep_apks
+        run: |
+          RAW_TAG="${{ github.event.inputs.release_tag || github.event.release.tag_name || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || '0.0.1' }}"
+          CLEAN_VER="${RAW_TAG#v}"
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk "dist/Proscenic-M7-LivingFlow-${CLEAN_VER}-release.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "dist/Proscenic-M7-LivingFlow-${CLEAN_VER}-debug.apk"
+          cp app/build/outputs/apk/release/app-release.apk "dist/Proscenic-M7-LivingFlow.apk"
+          echo "tag_name=${RAW_TAG}" >> "$GITHUB_OUTPUT"
+          echo "clean_ver=${CLEAN_VER}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: proscenic-m7-living-flow-apks-${{ steps.prep_apks.outputs.clean_ver }}
+          path: dist/*.apk
+
+      - name: Attach APKs to GitHub Release (on tag push, release event, or dispatch)
+        if: >-
+          github.event_name == 'release' ||
+          startsWith(github.ref, 'refs/tags/') ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.prep_apks.outputs.tag_name }}"
+          VER="${{ steps.prep_apks.outputs.clean_ver }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Uploading APKs to existing release $TAG..."
+            gh release upload "$TAG" \
+              "dist/Proscenic-M7-LivingFlow-${VER}-release.apk" \
+              "dist/Proscenic-M7-LivingFlow-${VER}-debug.apk" \
+              "dist/Proscenic-M7-LivingFlow.apk" \
+              --clobber
+          else
+            echo "Creating release $TAG and attaching APKs..."
+            gh release create "$TAG" \
+              "dist/Proscenic-M7-LivingFlow-${VER}-release.apk" \
+              "dist/Proscenic-M7-LivingFlow-${VER}-debug.apk" \
+              "dist/Proscenic-M7-LivingFlow.apk" \
+              --title "Proscenic M7 Living Flow v${VER}" \
+              --generate-notes
+          fi
