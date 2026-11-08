@@ -48,7 +48,7 @@ class RehomeClient(
     )
 
     /**
-     * Executes the full 6-step re-homing sequence against the vacuum on SoftAP.
+     * Executes the 6-step re-homing sequence against the physical vacuum on SoftAP.
      */
     suspend fun executeRehome(
         serverHostIp: String,
@@ -57,19 +57,40 @@ class RehomeClient(
         wifiSsid: String,
         wifiPassword: String,
         userId: String = "local_user",
-        dryRun: Boolean = false,
         onStepProgress: (StepLog) -> Unit = {}
     ): RehomeResult = withContext(Dispatchers.IO) {
         val steps = mutableListOf<StepLog>()
 
-        fun record(step: Int, title: String, tx: JSONObject, rx: String, ok: Boolean): StepLog {
-            val redactedTx = JSONObject(tx.toString()).apply {
-                if (has("staPwd")) put("staPwd", "********")
-            }
-            val entry = StepLog(step, title, redactedTx.toString(), rx, ok)
+        fun record(step: Int, title: String, txRaw: String, rx: String, ok: Boolean): StepLog {
+            val redactedTx = runCatching {
+                JSONObject(txRaw).apply {
+                    if (has("staPwd")) put("staPwd", "********")
+                }.toString().replace("\\/", "/")
+            }.getOrDefault(txRaw)
+            val entry = StepLog(step, title, redactedTx, rx, ok)
             steps.add(entry)
             onStepProgress(entry)
             return entry
+        }
+
+        if (wifiSsid.isBlank()) {
+            return@withContext RehomeResult(
+                success = false,
+                discoveredPort = defaultPort,
+                robotSerialNumber = null,
+                steps = steps,
+                errorMessage = "Enter your home 2.4GHz Wi-Fi SSID (not the robot's Proscenic-* hotspot name)."
+            )
+        }
+
+        if (wifiSsid.startsWith("Proscenic-", ignoreCase = true) || wifiSsid.startsWith("scenic-", ignoreCase = true)) {
+            return@withContext RehomeResult(
+                success = false,
+                discoveredPort = defaultPort,
+                robotSerialNumber = null,
+                steps = steps,
+                errorMessage = "'$wifiSsid' looks like the robot's own SoftAP hotspot! Enter your HOME 2.4GHz router Wi-Fi SSID and password so the robot can join your home network."
+            )
         }
 
         if (wifiPassword.length !in 8..64) {
@@ -78,100 +99,75 @@ class RehomeClient(
                 discoveredPort = defaultPort,
                 robotSerialNumber = null,
                 steps = steps,
-                errorMessage = "Wi-Fi password must be 8–64 characters (enforced by robot firmware)."
+                errorMessage = "Home Wi-Fi password must be 8–64 characters (enforced by robot firmware)."
             )
         }
 
         val cleanUrl = "http://${serverHostIp.trim()}:$httpPort/"
         var targetPort = defaultPort
-        var serialNumber = "LSLDSM7PRO20403551"
+        var serialNumber = ""
 
         try {
             // Step 0: Probe UDP 7913 first (and read serial with getSn)
-            val snCmd = JSONObject().put("cmd", "getSn")
-            if (dryRun) {
-                record(0, "Probe UDP $targetPort & Read Serial (getSn)", snCmd, """{"cmd":"getSn","result":"ok","sn":"$serialNumber","dryRun":true}""", true)
-            } else {
-                val reply = sendUdpCommand(targetPort, snCmd) ?: run {
-                    // Fallback sweep 9000..9050 if 7913 didn't answer
-                    val swept = sweepPorts(9000..9100)
-                        ?: return@withContext RehomeResult(
-                            success = false,
-                            discoveredPort = targetPort,
-                            robotSerialNumber = null,
-                            steps = steps,
-                            errorMessage = "No reply from $robotIp:$targetPort. Ensure the vacuum is in pairing mode (flashing blue) and your phone is connected to the 'Proscenic-XXXX' Wi-Fi AP."
-                        )
-                    targetPort = swept.first
-                    swept.second
-                }
-                serialNumber = reply.optString("sn", serialNumber).ifBlank { serialNumber }
-                record(0, "Probe UDP $targetPort & Read Serial (getSn)", snCmd, reply.toString(), true)
+            val snCmd = """{"cmd":"getSn"}"""
+            val reply = sendUdpRawCommand(targetPort, snCmd) ?: run {
+                val swept = sweepPorts(9000..9100)
+                    ?: return@withContext RehomeResult(
+                        success = false,
+                        discoveredPort = targetPort,
+                        robotSerialNumber = null,
+                        steps = steps,
+                        errorMessage = "No reply from $robotIp:$targetPort. Ensure the vacuum is in pairing mode (hold Power + Home 5s) and your phone is connected to the 'Proscenic-XXXX' Wi-Fi AP."
+                    )
+                targetPort = swept.first
+                swept.second
             }
+            serialNumber = reply.optString("sn", "").trim()
+            record(0, "0/6 Probe UDP $targetPort & Read Serial (getSn)", snCmd, reply.toString(), true)
 
             // Step 1: setUrl (Channel-A HTTP base URL -> writes /data/bin/Run/Config/url)
-            val setUrlHttp = JSONObject().put("cmd", "setUrl").put("url", cleanUrl)
-            if (dryRun) {
-                record(1, "1/6 Set Channel-A Base URL", setUrlHttp, """{"cmd":"setUrl","result":"ok"}""", true)
-            } else {
-                val r1 = requireOk(targetPort, setUrlHttp)
-                record(1, "1/6 Set Channel-A Base URL", setUrlHttp, r1.toString(), true)
-            }
+            // IMPORTANT: Do NOT escape '/' as '\/' — robot firmware reads raw URL string
+            val setUrlHttp = """{"cmd":"setUrl","url":"$cleanUrl"}"""
+            val r1 = requireOkRaw(targetPort, setUrlHttp, "setUrl(url)")
+            record(1, "1/6 Set Channel-A Base URL ($cleanUrl)", setUrlHttp, r1.toString(), true)
 
             // Step 2: setUrl (Channel-B Push Gateway -> writes /data/bin/Run/Config/ip_port.json)
             val setUrlGw = JSONObject()
                 .put("cmd", "setUrl")
                 .put("ip", serverHostIp.trim())
                 .put("port", gatewayPort)
-            if (dryRun) {
-                record(2, "2/6 Set Channel-B Push Gateway (ip_port.json)", setUrlGw, """{"cmd":"setUrl","result":"ok"}""", true)
-            } else {
-                val r2 = requireOk(targetPort, setUrlGw)
-                record(2, "2/6 Set Channel-B Push Gateway (ip_port.json)", setUrlGw, r2.toString(), true)
-            }
+                .toString()
+            val r2 = requireOkRaw(targetPort, setUrlGw, "setUrl(ip,port)")
+            record(2, "2/6 Set Channel-B Push Gateway (${serverHostIp.trim()}:$gatewayPort)", setUrlGw, r2.toString(), true)
 
             // Step 3: getCfg (Verify config state)
-            val getCfg = JSONObject().put("cmd", "getCfg")
-            if (dryRun) {
-                record(3, "3/6 Verify Robot Config (getCfg)", getCfg, """{"cmd":"getCfg","result":"ok","staName":"$wifiSsid"}""", true)
-            } else {
-                val r3 = sendUdpCommand(targetPort, getCfg) ?: JSONObject().put("result", "ok")
-                record(3, "3/6 Verify Robot Config (getCfg)", getCfg, r3.toString(), true)
-            }
+            val getCfg = """{"cmd":"getCfg"}"""
+            val r3 = sendUdpRawCommand(targetPort, getCfg) ?: JSONObject().put("result", "ok")
+            record(3, "3/6 Read Current Robot Config (getCfg)", getCfg, r3.toString(), true)
 
             // Step 4: setID (Arm BindUser thread with userId + deviceSN)
             val setId = JSONObject()
                 .put("cmd", "setID")
                 .put("id", userId)
                 .put("deviceSN", serialNumber)
-            if (dryRun) {
-                record(4, "4/6 Arm Device Binding (setID)", setId, """{"cmd":"getID","result":"ok","type":"ipfromapp"}""", true)
-            } else {
-                val r4 = requireOk(targetPort, setId)
-                record(4, "4/6 Arm Device Binding (setID)", setId, r4.toString(), true)
-            }
+                .toString()
+            val r4 = requireOkRaw(targetPort, setId, "setID")
+            record(4, "4/6 Arm Device Binding (setID)", setId, r4.toString(), true)
 
             // Step 5: setSta (Store home Wi-Fi credentials in memory)
             val setSta = JSONObject()
                 .put("cmd", "setSta")
-                .put("staName", wifiSsid)
+                .put("staName", wifiSsid.trim())
                 .put("staPwd", wifiPassword)
-            if (dryRun) {
-                record(5, "5/6 Store Home Wi-Fi Credentials (setSta)", setSta, """{"cmd":"setSta","result":"ok","code":2}""", true)
-            } else {
-                val r5 = requireOk(targetPort, setSta)
-                record(5, "5/6 Store Home Wi-Fi Credentials (setSta)", setSta, r5.toString(), true)
-            }
+                .toString()
+            val r5 = requireOkRaw(targetPort, setSta, "setSta")
+            record(5, "5/6 Store Home Wi-Fi ('${wifiSsid.trim()}')", setSta, r5.toString(), true)
 
             // Step 6: applyCfg (Commit Wi-Fi config; robot tears down AP and joins home LAN)
-            val applyCfg = JSONObject().put("cmd", "applyCfg")
-            if (dryRun) {
-                record(6, "6/6 Commit & Join Home Wi-Fi (applyCfg)", applyCfg, """{"cmd":"applyCfg","result":"ok","code":1}""", true)
-            } else {
-                val r6 = sendUdpCommand(targetPort, applyCfg)
-                val rxText = r6?.toString() ?: """{"note":"SoftAP closed as robot switched to station mode (expected)"}"""
-                record(6, "6/6 Commit & Join Home Wi-Fi (applyCfg)", applyCfg, rxText, true)
-            }
+            val applyCfg = """{"cmd":"applyCfg"}"""
+            val r6 = sendUdpRawCommand(targetPort, applyCfg)
+            val rxText = r6?.toString() ?: """{"note":"SoftAP closed as robot switched to home Wi-Fi (expected)"}"""
+            record(6, "6/6 Commit & Join Home Wi-Fi (applyCfg)", applyCfg, rxText, true)
 
             RehomeResult(
                 success = true,
@@ -183,24 +179,24 @@ class RehomeClient(
             RehomeResult(
                 success = false,
                 discoveredPort = targetPort,
-                robotSerialNumber = serialNumber,
+                robotSerialNumber = serialNumber.ifBlank { null },
                 steps = steps,
                 errorMessage = e.message ?: "UDP provisioning failed"
             )
         }
     }
 
-    private fun requireOk(port: Int, payload: JSONObject): JSONObject {
-        val reply = sendUdpCommand(port, payload)
-            ?: throw IllegalStateException("No UDP reply for ${payload.optString("cmd")} on $robotIp:$port")
+    private fun requireOkRaw(port: Int, rawJson: String, label: String): JSONObject {
+        val reply = sendUdpRawCommand(port, rawJson)
+            ?: throw IllegalStateException("No UDP reply for $label on $robotIp:$port")
         if (reply.optString("result") != "ok") {
-            throw IllegalStateException("Robot rejected ${payload.optString("cmd")}: $reply")
+            throw IllegalStateException("Robot rejected $label: $reply")
         }
         return reply
     }
 
-    private fun sendUdpCommand(port: Int, payload: JSONObject): JSONObject? {
-        val bytes = payload.toString().toByteArray(Charsets.UTF_8)
+    private fun sendUdpRawCommand(port: Int, rawJson: String): JSONObject? {
+        val bytes = rawJson.toByteArray(Charsets.UTF_8)
         val addr = InetAddress.getByName(robotIp)
         DatagramSocket().use { sock ->
             sock.soTimeout = timeoutMs

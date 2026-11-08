@@ -188,12 +188,25 @@ fun SchedulesScreen(
             }
 
             // 3. Weekly Cleaning Schedules List
-            items(uiState.schedules, key = { it.id }) { entry ->
-                ScheduleCalmCard(
-                    entry = entry,
-                    onToggleEnabled = { viewModel.toggleScheduleEnabled(entry.id, it) },
-                    onDelete = { viewModel.deleteSchedule(entry.id) }
-                )
+            if (uiState.schedules.isEmpty()) {
+                item {
+                    InsetGroupedCalmCard(
+                        title = "No Schedules Configured Yet",
+                        subtitle = if (uiState.robotSocketConnected) {
+                            "No scheduled cleanings were reported by your robot (21002). Tap 'New Schedule' above to push a schedule (21001) to the vacuum."
+                        } else {
+                            "Waiting for your physical robot to connect on TCP :8081 and upload its saved schedules (21002), or tap 'New Schedule' to create one."
+                        }
+                    ) {}
+                }
+            } else {
+                items(uiState.schedules, key = { it.id }) { entry ->
+                    ScheduleCalmCard(
+                        entry = entry,
+                        onToggleEnabled = { viewModel.toggleScheduleEnabled(entry.id, it) },
+                        onDelete = { viewModel.deleteSchedule(entry.id) }
+                    )
+                }
             }
         }
 

@@ -22,18 +22,18 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Router
-import androidx.compose.material.icons.filled.Science
-import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -58,14 +58,17 @@ import com.proscenic.m7.ui.theme.livingFlowGlass
 import com.proscenic.m7.ui.theme.progressiveEdgeScrim
 
 /**
- * ColorOS 17 Living Flow SoftAP Re-homing Wizard, Home Assistant Bridge & Accessibility Screen.
+ * ColorOS 17 Living Flow Real-Hardware Connection Verification, SoftAP Re-homing Wizard,
+ * Home Assistant Bridge & Accessibility Screen.
  *
  * Includes:
- * 1. Connection Mode Segmented Glass Pill (`LOCAL_SERVER`, `LAN_BRIDGE`, `SIMULATOR`).
- * 2. SoftAP UDP `7913` Re-homing Wizard (`RehomeClient`) with live datagram progress steps.
+ * 1. Live Robot Connection Verification & Physical Control Test Card (`ONLINE` vs `DISCONNECTED`,
+ *    robot SN, remote IP:port, heartbeat ping counter, and instant **Beep Robot (3010)** / **Request Map** buttons).
+ * 2. SoftAP UDP `7913` Re-homing Wizard (`RehomeClient`) with automatic preservation of the phone's
+ *    Home Wi-Fi IP (`192.168.1.x`) when switching to the `Proscenic-*` SoftAP (`192.168.78.x`),
+ *    and clear guardrails against entering `Proscenic-*` into the Home 2.4GHz Wi-Fi SSID field.
  * 3. Copyable Home Assistant `configuration.yaml` REST integration snippet.
- * 4. ColorOS 17 Living Flow Accessibility & Visual Guardrails Card (`Reduce Transparency`,
- *    `Reduce Motion`, `High Contrast Contour`, and `Dark / Light Mode`).
+ * 4. ColorOS 17 Living Flow Accessibility & Visual Guardrails Card.
  * 5. Live Channel-A HTTP (`:8080`) & Channel-B TCP (`:8081`) Wire Trace Console.
  */
 @Composable
@@ -83,11 +86,24 @@ fun RehomeAndHaScreen(
     }
 
     var robotApIp by remember { mutableStateOf("192.168.78.1") }
-    var serverHostIp by remember(uiState.localLanIp) { mutableStateOf(uiState.localLanIp) }
+    var serverHostIp by remember {
+        mutableStateOf(
+            if (uiState.localLanIp.startsWith("192.168.78.")) "192.168.1.110" else uiState.localLanIp
+        )
+    }
+    // Preserve the phone's Home LAN IP whenever the phone is on home Wi-Fi (not 192.168.78.x SoftAP)
+    LaunchedEffect(uiState.localLanIp) {
+        if (!uiState.localLanIp.startsWith("192.168.78.") && uiState.localLanIp != "0.0.0.0") {
+            serverHostIp = uiState.localLanIp
+        }
+    }
+
     var wifiSsid by remember { mutableStateOf("") }
     var wifiPassword by remember { mutableStateOf("") }
     var userId by remember { mutableStateOf("local_user") }
     var copiedToast by remember { mutableStateOf(false) }
+
+    val onRobotSoftAp = uiState.localLanIp.startsWith("192.168.78.")
 
     val haYamlSnippet = remember(serverHostIp) {
         """
@@ -138,7 +154,7 @@ fun RehomeAndHaScreen(
                 start = 16.dp,
                 end = 16.dp,
                 top = 24.dp,
-                bottom = 112.dp
+                bottom = 128.dp
             ),
             verticalArrangement = Arrangement.spacedBy(14.dp),
             modifier = Modifier.fillMaxSize()
@@ -147,33 +163,103 @@ fun RehomeAndHaScreen(
             item {
                 Column(modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)) {
                     Text(
-                        text = "Pairing, HA & Flow UI",
+                        text = "Pairing & Live Diagnostics",
                         style = MaterialTheme.typography.titleLarge,
                         color = colors.textPrimary
                     )
                     Text(
-                        text = "SoftAP UDP 7913 Re-homing • Local HTTP/TCP Server • Living Flow Settings",
+                        text = "Verify Physical Robot Connection • SoftAP UDP 7913 Re-homing • Home Assistant",
                         style = MaterialTheme.typography.labelSmall,
                         color = colors.textSecondary
                     )
                 }
             }
 
-            // 2. Connection Architecture Card
+            // 2. Live Physical Robot Connection Verification Card
             item {
                 InsetGroupedCalmCard(
-                    title = "Local Architecture Mode",
-                    subtitle = "Embedded server listens on :8080 (Channel A HTTP) and :8081 (Channel B TCP Push Gateway)",
-                    isActive = uiState.serverRunning
+                    title = if (uiState.robotSocketConnected) {
+                        "ROBOT CONNECTED & ONLINE"
+                    } else {
+                        "ROBOT DISCONNECTED (WAITING ON TCP :8081)"
+                    },
+                    subtitle = if (uiState.robotSocketConnected) {
+                        "Your physical Proscenic vacuum is connected to this phone's TCP :8081 Push Gateway."
+                    } else {
+                        "Embedded server is running on HTTP :8080 and TCP :8081, waiting for the vacuum to join your home Wi-Fi and connect."
+                    },
+                    isActive = uiState.robotSocketConnected
                 ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(tokens.radii.md))
+                            .background(colors.bgCanvas)
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        DiagnosticRow(
+                            label = "TCP :8081 Socket State",
+                            value = if (uiState.robotSocketConnected) "CONNECTED (ONLINE)" else "DISCONNECTED",
+                            valueColor = if (uiState.robotSocketConnected) colors.success else colors.danger
+                        )
+                        DiagnosticRow(
+                            label = "Robot Serial Number (10001)",
+                            value = uiState.connectedRobotSn ?: "None yet",
+                            valueColor = colors.textPrimary
+                        )
+                        DiagnosticRow(
+                            label = "Robot LAN IP : Port",
+                            value = uiState.connectedRobotAddress ?: "Not connected",
+                            valueColor = colors.accentCyan
+                        )
+                        DiagnosticRow(
+                            label = "Live Heartbeats (21006)",
+                            value = "${uiState.heartbeatCount} pings received",
+                            valueColor = if (uiState.heartbeatCount > 0) colors.success else colors.textSecondary
+                        )
+                        DiagnosticRow(
+                            label = "Current Phone Wi-Fi IP",
+                            value = if (onRobotSoftAp) {
+                                "${uiState.localLanIp} (Connected to Robot SoftAP)"
+                            } else {
+                                "${uiState.localLanIp} (Home Wi-Fi)"
+                            },
+                            valueColor = if (onRobotSoftAp) colors.warning else colors.accentCyan
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        LivingFlowPillButton(
+                            text = "Beep Robot (Test 3010)",
+                            icon = Icons.Default.Campaign,
+                            variant = if (uiState.robotSocketConnected) {
+                                FluidButtonVariant.PRIMARY
+                            } else {
+                                FluidButtonVariant.SECONDARY_GLASS
+                            },
+                            onClick = { viewModel.locateRobot() },
+                            modifier = Modifier.weight(1f)
+                        )
+                        LivingFlowPillButton(
+                            text = "Request Status & Map",
+                            icon = Icons.Default.Refresh,
+                            variant = FluidButtonVariant.SECONDARY_GLASS,
+                            onClick = { viewModel.refreshRobotTelemetryNow() },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
                     LivingFlowSegmentedControl(
                         items = ConnectionMode.entries,
                         selectedItem = uiState.connectionMode,
                         labelProvider = {
                             when (it) {
-                                ConnectionMode.LOCAL_SERVER -> "On-Phone"
-                                ConnectionMode.LAN_BRIDGE -> "LAN Bridge"
-                                ConnectionMode.SIMULATOR -> "Simulator"
+                                ConnectionMode.LOCAL_SERVER -> "On-Phone Server (:8080/:8081)"
+                                ConnectionMode.LAN_BRIDGE -> "External LAN Bridge"
                             }
                         },
                         onSelect = { viewModel.setConnectionMode(it) },
@@ -190,33 +276,41 @@ fun RehomeAndHaScreen(
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Phone LAN IP: ${uiState.localLanIp} • HTTP :8080 • TCP :8081",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = colors.accentCyan
-                        )
-                        Text(
-                            text = if (uiState.robotSocketConnected) "ROBOT ONLINE" else "SIMULATOR READY",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = if (uiState.robotSocketConnected) colors.success else colors.warning
-                        )
-                    }
                 }
             }
 
-            // 3. SoftAP UDP 7913 Re-Homing Wizard (`rehome.py` port)
+            // 3. SoftAP UDP 7913 Re-Homing Wizard
             item {
                 InsetGroupedCalmCard(
                     title = "SoftAP UDP 7913 Re-Homing Wizard",
-                    subtitle = "Redirects the vacuum from Proscenic Cloud (`47.91.67.181`) to your local server without rooting. Hold Power + Home for 5s until 'Connecting to network', join the `Proscenic-M7-*` AP, then run below."
+                    subtitle = "Step 1: On Home Wi-Fi, verify 'Phone Home Wi-Fi IP' below matches your phone's IP (e.g. 192.168.1.110).\n" +
+                        "Step 2: Hold Power + Home on the robot for 5s until it says 'Connecting to network', then connect your phone's Wi-Fi to 'Proscenic-7190...'.\n" +
+                        "Step 3: Enter your HOME 2.4GHz router Wi-Fi name & password below and tap 'Re-Home Vacuum'."
                 ) {
+                    // Explicit guardrail banner so user never enters Proscenic-* as the home router SSID
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(tokens.radii.md))
+                            .background(colors.warning.copy(alpha = 0.16f))
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = colors.warning,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            text = "IMPORTANT: In 'Your Home 2.4GHz Wi-Fi SSID', type your home router's Wi-Fi name — do NOT type 'Proscenic-7190...'!",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.textPrimary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         OutlinedTextField(
                             value = robotApIp,
@@ -229,7 +323,7 @@ fun RehomeAndHaScreen(
                         OutlinedTextField(
                             value = serverHostIp,
                             onValueChange = { serverHostIp = it },
-                            label = { Text("Local Server IP") },
+                            label = { Text("Phone Home Wi-Fi IP") },
                             singleLine = true,
                             shape = RoundedCornerShape(tokens.radii.md),
                             modifier = Modifier.weight(1f)
@@ -240,7 +334,8 @@ fun RehomeAndHaScreen(
                         OutlinedTextField(
                             value = wifiSsid,
                             onValueChange = { wifiSsid = it },
-                            label = { Text("Home 2.4GHz Wi-Fi SSID") },
+                            label = { Text("Your Home 2.4GHz Wi-Fi SSID") },
+                            placeholder = { Text("e.g. MyHomeRouter_2.4G") },
                             singleLine = true,
                             shape = RoundedCornerShape(tokens.radii.md),
                             modifier = Modifier.weight(1f)
@@ -248,52 +343,33 @@ fun RehomeAndHaScreen(
                         OutlinedTextField(
                             value = wifiPassword,
                             onValueChange = { wifiPassword = it },
-                            label = { Text("Wi-Fi Password") },
+                            label = { Text("Home Wi-Fi Password") },
                             singleLine = true,
                             shape = RoundedCornerShape(tokens.radii.md),
                             modifier = Modifier.weight(1f)
                         )
                     }
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        LivingFlowPillButton(
-                            text = "Dry-Run 6 Steps",
-                            icon = Icons.Default.Science,
-                            variant = FluidButtonVariant.SECONDARY_GLASS,
-                            enabled = !uiState.rehomeInProgress,
-                            onClick = {
-                                viewModel.runRehomeWizard(
-                                    robotApIp = robotApIp,
-                                    serverHostIp = serverHostIp,
-                                    wifiSsid = wifiSsid.ifBlank { "MyHomeWiFi" },
-                                    wifiPassword = wifiPassword.ifBlank { "secret123" },
-                                    userId = userId,
-                                    dryRun = true
-                                )
-                            },
-                            modifier = Modifier.weight(1f)
-                        )
-                        LivingFlowPillButton(
-                            text = "Re-Home Vacuum",
-                            icon = Icons.Default.Wifi,
-                            variant = FluidButtonVariant.PRIMARY,
-                            enabled = !uiState.rehomeInProgress,
-                            onClick = {
-                                viewModel.runRehomeWizard(
-                                    robotApIp = robotApIp,
-                                    serverHostIp = serverHostIp,
-                                    wifiSsid = wifiSsid,
-                                    wifiPassword = wifiPassword,
-                                    userId = userId,
-                                    dryRun = false
-                                )
-                            },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
+                    LivingFlowPillButton(
+                        text = if (uiState.rehomeInProgress) {
+                            "Sending UDP 7913 Commands..."
+                        } else {
+                            "Re-Home Vacuum Over UDP 7913"
+                        },
+                        icon = Icons.Default.Wifi,
+                        variant = FluidButtonVariant.PRIMARY,
+                        enabled = !uiState.rehomeInProgress,
+                        onClick = {
+                            viewModel.runRehomeWizard(
+                                robotApIp = robotApIp,
+                                serverHostIp = serverHostIp,
+                                wifiSsid = wifiSsid,
+                                wifiPassword = wifiPassword,
+                                userId = userId
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
 
                     if (uiState.rehomeStatusBanner != null) {
                         Text(
@@ -423,7 +499,7 @@ fun RehomeAndHaScreen(
             item {
                 InsetGroupedCalmCard(
                     title = "Live Wire Trace Console",
-                    subtitle = "Recent Channel-A HTTP (:8080) & Channel-B TCP (:8081 #\\t#) frames"
+                    subtitle = "Real-time Channel-A HTTP (:8080) & Channel-B TCP (:8081 #\\t#) packets from your robot"
                 ) {
                     Column(
                         modifier = Modifier
@@ -435,13 +511,13 @@ fun RehomeAndHaScreen(
                     ) {
                         if (uiState.wireTraces.isEmpty()) {
                             Text(
-                                text = "Trigger any vacuum command or schedule to inspect live `#\\t#` frames here.",
+                                text = "No packets received yet. Once your robot connects to ${serverHostIp}:8080 / :8081, every HTTP request and TCP `#\\t#` frame will stream here live.",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontFamily = FontFamily.Monospace,
                                 color = colors.textSecondary
                             )
                         } else {
-                            uiState.wireTraces.take(12).forEach { trace ->
+                            uiState.wireTraces.take(18).forEach { trace ->
                                 Text(
                                     text = "[${trace.channel} ${trace.direction}] ${trace.summary}",
                                     style = MaterialTheme.typography.labelSmall,
@@ -471,17 +547,48 @@ fun RehomeAndHaScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Pairing, HA & Flow UI",
+                    text = "Pairing & Live Diagnostics",
                     style = MaterialTheme.typography.titleSmall,
                     color = colors.textPrimary
                 )
                 Text(
-                    text = "${uiState.localLanIp}:8080",
+                    text = if (uiState.robotSocketConnected) {
+                        "ONLINE • ${uiState.connectedRobotSn ?: "ROBOT"}"
+                    } else {
+                        "WAITING • ${serverHostIp}:8081"
+                    },
                     style = MaterialTheme.typography.labelSmall,
-                    color = colors.accentCyan
+                    color = if (uiState.robotSocketConnected) colors.success else colors.warning
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun DiagnosticRow(
+    label: String,
+    value: String,
+    valueColor: androidx.compose.ui.graphics.Color
+) {
+    val colors = LivingFlowTheme.colors
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.textSecondary
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.SemiBold,
+            color = valueColor
+        )
     }
 }
 

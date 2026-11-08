@@ -1,7 +1,7 @@
 package com.proscenic.m7.protocol
 
-import com.proscenic.m7.simulator.SimulatedVacuumEngine
 import kotlinx.coroutines.runBlocking
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -13,28 +13,58 @@ class ProscenicProtocolTest {
 
     @Test
     fun `Lz4Codec round-trip compresses and decompresses 120x100 occupancy grid`() {
-        val initialMap = SimulatedVacuumEngine.createInitialHouseMap()
-        assertEquals(120, initialMap.width)
-        assertEquals(100, initialMap.height)
-        assertEquals(12_000, initialMap.cells.size)
+        val cells = ByteArray(120 * 100) { idx ->
+            when {
+                idx % 17 == 0 -> -1 // obstacle wall
+                idx % 5 == 0 -> 1   // room 1
+                idx % 7 == 0 -> 2   // room 2
+                else -> 0           // unexplored
+            }
+        }
 
-        val (b64, _) = Lz4Codec.encodeMapBase64Lz4(initialMap.cells)
+        val (b64, _) = Lz4Codec.encodeMapBase64Lz4(cells)
         val decompressed = Lz4Codec.decodeMapBase64Lz4(b64, width = 120, height = 100)
 
-        assertArrayEquals(initialMap.cells, decompressed)
+        assertArrayEquals(cells, decompressed)
     }
 
     @Test
-    fun `createInitialHouseMap round-trips Base64 LZ4 20002 map and computes room centroids and cell math`() {
-        val decoded = SimulatedVacuumEngine.createInitialHouseMap()
-        assertEquals(120, decoded.width)
-        assertEquals(100, decoded.height)
+    fun `parseMap20002 decodes Base64 LZ4 20002 map and computes room centroids and cell math`() {
+        val width = 60
+        val height = 50
+        val cells = ByteArray(width * height) { idx ->
+            val col = idx % width
+            val row = idx / width
+            when {
+                col in 5..25 && row in 5..20 -> 1.toByte()
+                col in 30..50 && row in 25..40 -> 2.toByte()
+                else -> 0.toByte()
+            }
+        }
+        val (b64Map, _) = Lz4Codec.encodeMapBase64Lz4(cells)
+
+        val payload = JSONObject().apply {
+            put("mapId", 42L)
+            put("width", width)
+            put("height", height)
+            put("resolution", 0.05)
+            put("x_min", -1.5)
+            put("y_min", -1.25)
+            put("chargeHandlePos", JSONArray().put(-1000).put(-800))
+            put("chargeHandlePhi", 0)
+            put("posArray", JSONArray().put(JSONArray().put(250).put(-350)))
+            put("map", b64Map)
+        }
+
+        val decoded = ProscenicProtocol.parseMap20002(payload)
+        assertEquals(60, decoded.width)
+        assertEquals(50, decoded.height)
         assertEquals(0.05f, decoded.resolution, 0.0001f)
-        assertEquals(PointMm(-2400, -1900), decoded.chargeHandlePos)
-        assertTrue("Expected at least 4 segmented rooms", decoded.roomCentroidsMm.size >= 4)
+        assertEquals(PointMm(-1000, -800), decoded.chargeHandlePos)
+        assertTrue("Expected 2 segmented rooms", decoded.roomCentroidsMm.size == 2)
 
         // Verify cell <-> world mm round-trip (`FUNC_MAP.md` §2.3)
-        val sampleMm = PointMm(450, -750)
+        val sampleMm = PointMm(225, -325)
         val cell = decoded.worldMmToCell(sampleMm)
         val roundTripMm = decoded.cellToWorldMm(cell.col, cell.row)
         assertEquals(sampleMm.xMm, roundTripMm.xMm)
@@ -91,7 +121,30 @@ class ProscenicProtocolTest {
 
     @Test
     fun `buildSetSchedules splits overnight quiet hours across midnight and round-trips 21002`() {
-        val schedules = SimulatedVacuumEngine.defaultSchedules()
+        val schedules = listOf(
+            ScheduleEntry(
+                id = "sched-1",
+                label = "Morning Sweep",
+                enabled = true,
+                hour = 9,
+                minute = 0,
+                daysOfWeek = setOf(1, 2, 3, 4, 5),
+                cleanIds = listOf(-1, -3),
+                suction = SuctionLevel.AUTO,
+                passes = 1
+            ),
+            ScheduleEntry(
+                id = "sched-2",
+                label = "Weekend Deep Clean",
+                enabled = true,
+                hour = 14,
+                minute = 30,
+                daysOfWeek = setOf(0, 6),
+                cleanIds = listOf(-1, -3),
+                suction = SuctionLevel.STRONG,
+                passes = 2
+            )
+        )
         val quietHours = QuietHoursConfig(
             enabled = true,
             startHour = 23,
@@ -115,26 +168,18 @@ class ProscenicProtocolTest {
     }
 
     @Test
-    fun `RehomeClient dryRun executes all UDP 7913 steps without sending buggy bindOk`() = runBlocking {
+    fun `RehomeClient rejects robot SoftAP SSID entered as Home Router SSID`() = runBlocking {
         val client = RehomeClient()
-        val result = client.executeRehome(
-            serverHostIp = "192.168.1.50",
+        val badResult = client.executeRehome(
+            serverHostIp = "192.168.1.110",
             httpPort = 8080,
             gatewayPort = 8081,
-            wifiSsid = "HomeLAN",
-            wifiPassword = "Password123",
-            userId = "local_user",
-            dryRun = true
+            wifiSsid = "Proscenic-7190 C019707U",
+            wifiPassword = "testtest",
+            userId = "local_user"
         )
 
-        assertTrue(result.success)
-        assertEquals(7, result.steps.size)
-        assertFalse(
-            "Must never send buggy bindOk command (causes shell fork storm in FUN_00463c60)",
-            result.steps.any { it.txJson.contains("bindOk") }
-        )
-        assertTrue(result.steps[1].txJson.contains("http://192.168.1.50:8080/"))
-        assertTrue(result.steps[2].txJson.contains("\"port\":8081"))
-        assertTrue(result.steps[6].txJson.contains("applyCfg"))
+        assertFalse(badResult.success)
+        assertTrue(badResult.errorMessage?.contains("HOME 2.4GHz Wi-Fi name") == true)
     }
 }

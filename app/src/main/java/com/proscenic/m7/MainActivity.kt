@@ -119,7 +119,8 @@ fun ProscenicLivingFlowApp(
                         viewModel = viewModel,
                         showRemoteModal = showRemoteModal,
                         onDismissRemoteModal = { showRemoteModal = false },
-                        onOpenRemoteModal = { showRemoteModal = true }
+                        onOpenRemoteModal = { showRemoteModal = true },
+                        onNavigateToPairing = { selectedTabIndex = 2 }
                     )
                     1 -> SchedulesScreen(
                         uiState = uiState,

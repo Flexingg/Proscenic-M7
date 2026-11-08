@@ -86,8 +86,17 @@ class LocalVacuumServer(
     private val _isRobotConnected = MutableStateFlow(false)
     val isRobotConnected: StateFlow<Boolean> = _isRobotConnected.asStateFlow()
 
+    private val _connectedRobotAddress = MutableStateFlow<String?>(null)
+    val connectedRobotAddress: StateFlow<String?> = _connectedRobotAddress.asStateFlow()
+
+    private val _connectedRobotSn = MutableStateFlow<String?>(null)
+    val connectedRobotSn: StateFlow<String?> = _connectedRobotSn.asStateFlow()
+
+    private val _heartbeatCount = MutableStateFlow(0)
+    val heartbeatCount: StateFlow<Int> = _heartbeatCount.asStateFlow()
+
     @Volatile
-    var latestStatusSnapshot: VacuumStatus = VacuumStatus()
+    var latestStatusSnapshot: VacuumStatus = VacuumStatus(sn = "", mode = "offline", battery = 0, isOnline = false)
 
     @Volatile
     var latestMapSnapshot: VacuumMap? = null
@@ -108,12 +117,13 @@ class LocalVacuumServer(
         gatewayJob = scope.launch {
             runGatewayServer()
         }
-        trace("SYSTEM", "INFO", "Started Channel-A HTTP (:$httpPort) & Channel-B TCP Gateway (:$gatewayPort)", "")
+        trace("SYSTEM", "INFO", "Listening on HTTP :$httpPort & TCP Gateway :$gatewayPort (waiting for robot)", "")
     }
 
     fun stop() {
         _isRunning.value = false
         _isRobotConnected.value = false
+        _connectedRobotAddress.value = null
         runCatching { activeRobotSocket.getAndSet(null)?.close() }
         runCatching { httpServerSocket?.close() }
         runCatching { gatewayServerSocket?.close() }
@@ -180,8 +190,10 @@ class LocalVacuumServer(
         }
         val out = socket.getOutputStream()
         activeRobotOutput.set(out)
+        val remoteAddr = "${socket.inetAddress.hostAddress}:${socket.port}"
+        _connectedRobotAddress.value = remoteAddr
         _isRobotConnected.value = true
-        trace("B-TCP", "RX", "Robot connected from ${socket.inetAddress.hostAddress}:${socket.port}", "")
+        trace("B-TCP", "RX", "Robot TCP connected from $remoteAddr", "")
 
         try {
             val input = socket.getInputStream()
@@ -209,6 +221,8 @@ class LocalVacuumServer(
             if (activeRobotSocket.compareAndSet(socket, null)) {
                 activeRobotOutput.set(null)
                 _isRobotConnected.value = false
+                _connectedRobotAddress.value = null
+                trace("B-TCP", "INFO", "Robot TCP disconnected ($remoteAddr)", "")
             }
             runCatching { socket.close() }
         }
@@ -224,22 +238,26 @@ class LocalVacuumServer(
                 val sn = data?.optString("sn").orEmpty()
                 trace("B-TCP", "RX", "Handshake 10001 (sn=$sn)", rawJson)
                 if (sn.isNotBlank()) {
+                    _connectedRobotSn.value = sn
                     latestStatusSnapshot = latestStatusSnapshot.copy(sn = sn, isOnline = true)
                     onStatusReceived(latestStatusSnapshot)
                 }
-                // Flush any queued commands + request initial map/status/zones/schedules
+                // Flush any queued commands + request real status, map, zones, and schedules from robot
                 drainOutboundQueue(out)
+                sendFrameToRobot(ProscenicProtocol.buildRequestStatus())
                 sendFrameToRobot(ProscenicProtocol.buildRequestMapUploadNow())
                 sendFrameToRobot(ProscenicProtocol.buildGetAreaTactics())
                 sendFrameToRobot(ProscenicProtocol.buildGetSchedules())
             }
             21006 -> {
                 // Keepalive Ping -> MUST reply immediately with enveloped 21006 + isExistConnect:true
+                _heartbeatCount.value = _heartbeatCount.value + 1
                 val pong = ProscenicProtocol.buildKeepalivePong(announceAppOnline = true)
                 synchronized(out) {
                     out.write(pong.toByteArray(Charsets.UTF_8))
                     out.flush()
                 }
+                trace("B-TCP", "RX", "Heartbeat 21006 (#${_heartbeatCount.value}) -> replied isExistConnect:true", rawJson)
                 drainOutboundQueue(out)
             }
             else -> {

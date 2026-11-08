@@ -7,9 +7,10 @@ local.properties
 .idea/
 *.iml
 
-# Secrets — never committed
+# Secrets — never committed (except the public open-source APK update keystore)
 keystore.properties
 *.jks
+!app/keystore/proscenic-livingflow.jks
 *.keystore
 
 # APKs are ignored by default, EXCEPT the shipped release artifact in dist/.

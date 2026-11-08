@@ -1,11 +1,6 @@
 package com.proscenic.m7.ui
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
@@ -19,18 +14,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.BatteryChargingFull
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Gamepad
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.MyLocation
@@ -42,6 +33,7 @@ import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.WaterDrop
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -57,6 +49,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -64,6 +57,7 @@ import com.proscenic.m7.protocol.SuctionLevel
 import com.proscenic.m7.protocol.ZoneKind
 import com.proscenic.m7.ui.components.CircularGlassIconButton
 import com.proscenic.m7.ui.components.FluidButtonVariant
+import com.proscenic.m7.ui.components.InsetGroupedCalmCard
 import com.proscenic.m7.ui.components.LivingFlowPillButton
 import com.proscenic.m7.ui.components.LivingFlowSegmentedControl
 import com.proscenic.m7.ui.components.LivingFlowSwitch
@@ -78,15 +72,13 @@ import com.proscenic.m7.ui.theme.performLivingFlowHaptic
 import com.proscenic.m7.ui.theme.progressiveEdgeScrim
 
 /**
- * ColorOS 17 Living Flow 2D Map & Robot Control Screen.
+ * ColorOS 17 Living Flow 2D Map & Real Robot Control Screen (Zero Demo / Zero Simulator).
  *
- * Implements the "Floating Chrome, Calm Content" principle:
- * - Full-bleed interactive 2D LZ4 occupancy grid (`FloorMapCanvas`) fills the entire viewport.
- * - Top and bottom edges feature progressive blur / scrim gradients (`progressiveEdgeScrim`).
- * - Top telemetry capsule (`MorphingStatusCapsule`) + mode segmented control (`LivingFlowSegmentedControl`)
- *   float as `glass.regular` islands with 1dp contour glow.
- * - Bottom control sheet (`glass.thick`, `radius.xl = 32.dp`) floats above the navigation island,
- *   featuring a drag grabber (`36×4dp` pill) that expands/collapses with `spring.morph`.
+ * - Displays ONLY real telemetry and real `infoType: 20002` LZ4 floor maps uploaded by the physical
+ *   Proscenic M7 vacuum over TCP `:8081` and HTTP `:8080`.
+ * - When no map has been uploaded yet, displays a live connection diagnostic card showing whether
+ *   the robot TCP socket is connected, its IP address, serial number, heartbeat count, and buttons
+ *   to test the connection (**Test Beep 3010**, **Request Live Map 20002**, or **Open Pairing**).
  */
 @Composable
 fun MapDashboardScreen(
@@ -95,6 +87,7 @@ fun MapDashboardScreen(
     showRemoteModal: Boolean,
     onDismissRemoteModal: () -> Unit,
     onOpenRemoteModal: () -> Unit,
+    onNavigateToPairing: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val tokens = LivingFlowTheme.tokens
@@ -103,27 +96,102 @@ fun MapDashboardScreen(
 
     var sheetExpanded by remember { mutableStateOf(false) }
 
-    Box(modifier = modifier.fillMaxSize()) {
-        // 1. Full-bleed 2D Floor Map Canvas underneath floating chrome
-        FloorMapCanvas(
-            map = uiState.map,
-            status = uiState.status,
-            path = uiState.path,
-            regions = uiState.regions,
-            roomNames = uiState.roomNames,
-            selectedRoomLabels = uiState.selectedRoomLabels,
-            selectedZoneIds = uiState.selectedZoneIds,
-            interactionMode = uiState.mapInteractionMode,
-            activeZoneDrawKind = uiState.activeZoneDrawKind,
-            placedSpotTargetMm = uiState.placedSpotTargetMm,
-            mergeFirstRoomLabel = uiState.mergeFirstRoomLabel,
-            onRoomTapped = { viewModel.toggleRoomSelection(it) },
-            onZoneTapped = { viewModel.toggleZoneSelection(it) },
-            onZoneDrawn = { p1, p2 -> viewModel.addDrawnZone(p1, p2) },
-            onSpotMoved = { viewModel.setPlacedSpotTarget(it) },
-            onRoomSplitLineDrawn = { p1, p2 -> viewModel.splitSelectedRoom(p1, p2) },
-            modifier = Modifier.fillMaxSize()
-        )
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(colors.bgCanvas)
+    ) {
+        // 1. Real 2D Floor Map Canvas (only rendered when the physical robot has uploaded a 20002 map)
+        val realMap = uiState.map
+        if (realMap != null) {
+            FloorMapCanvas(
+                map = realMap,
+                status = uiState.status,
+                path = uiState.path,
+                regions = uiState.regions,
+                roomNames = uiState.roomNames,
+                selectedRoomLabels = uiState.selectedRoomLabels,
+                selectedZoneIds = uiState.selectedZoneIds,
+                interactionMode = uiState.mapInteractionMode,
+                activeZoneDrawKind = uiState.activeZoneDrawKind,
+                placedSpotTargetMm = uiState.placedSpotTargetMm,
+                mergeFirstRoomLabel = uiState.mergeFirstRoomLabel,
+                onRoomTapped = { viewModel.toggleRoomSelection(it) },
+                onZoneTapped = { viewModel.toggleZoneSelection(it) },
+                onZoneDrawn = { p1, p2 -> viewModel.addDrawnZone(p1, p2) },
+                onSpotMoved = { viewModel.setPlacedSpotTarget(it) },
+                onRoomSplitLineDrawn = { p1, p2 -> viewModel.splitSelectedRoom(p1, p2) },
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            // Real Connection Diagnostic State (when waiting for robot connection or first 20002 map upload)
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 20.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                InsetGroupedCalmCard(
+                    title = if (uiState.robotSocketConnected) {
+                        "Robot Connected — Waiting for 2D Map Upload"
+                    } else {
+                        "No Robot Connected Yet"
+                    },
+                    subtitle = if (uiState.robotSocketConnected) {
+                        "Connected to ${uiState.connectedRobotSn ?: "Proscenic M7"} at ${uiState.connectedRobotAddress ?: "TCP :8081"} (Heartbeats: ${uiState.heartbeatCount})"
+                    } else {
+                        "Listening on ${uiState.localLanIp}:8080 (HTTP) & :8081 (TCP Push Gateway)"
+                    },
+                    isActive = uiState.robotSocketConnected
+                ) {
+                    if (uiState.robotSocketConnected) {
+                        Text(
+                            text = "Your vacuum is connected to this phone over TCP :8081! Tap 'Beep Robot (Test)' to verify instant physical control, or 'Request Map Now' / start a clean so the vacuum uploads its 2D Lidar map (infoType 20002).",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = colors.textSecondary
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            LivingFlowPillButton(
+                                text = "Beep Robot (Test)",
+                                icon = Icons.Default.VolumeUp,
+                                variant = FluidButtonVariant.TONAL_ACCENT,
+                                onClick = { viewModel.locateRobotBeep() },
+                                modifier = Modifier.weight(1f)
+                            )
+                            LivingFlowPillButton(
+                                text = "Request Map Now",
+                                icon = Icons.Default.Refresh,
+                                variant = FluidButtonVariant.PRIMARY,
+                                onClick = { viewModel.refreshRobotTelemetryNow() },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = "Your phone is listening for your Proscenic M7 on ${uiState.localLanIp}:8081, but the robot has not opened a TCP connection yet.\n\n" +
+                                "• Make sure during SoftAP Pairing you entered your HOME 2.4GHz Wi-Fi name & password (NOT the 'Proscenic-7190...' hotspot name).\n" +
+                                "• Ensure your phone is now connected to that same home Wi-Fi network.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = colors.textSecondary
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            LivingFlowPillButton(
+                                text = "Open Pairing & Diagnostics",
+                                variant = FluidButtonVariant.PRIMARY,
+                                onClick = onNavigateToPairing,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+            }
+        }
 
         // 2. Top Progressive Scrim + Floating Glass Header Islands
         Column(
@@ -133,35 +201,34 @@ fun MapDashboardScreen(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // Top Row: Expressive Tabular Telemetry Card + Quick Circular Glass Toggles
+            // Top Row: Real Connection & Telemetry Card + Quick Circular Glass Toggles
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // Floating Glass Telemetry Card
                 Row(
                     modifier = Modifier
                         .weight(1f)
                         .livingFlowGlass(
                             level = GlassMaterialLevel.REGULAR,
                             cornerRadius = tokens.radii.lg,
-                            isActive = uiState.status.mode == "sweep"
+                            isActive = uiState.robotSocketConnected
                         )
                         .padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             val dotColor = when {
-                                uiState.status.errorCode != 0 -> colors.danger
+                                !uiState.robotSocketConnected -> colors.danger
+                                uiState.status.errorCode != 0 -> colors.warning
                                 uiState.status.mode == "sweep" -> colors.accentCyan
-                                uiState.robotSocketConnected -> colors.success
-                                else -> colors.warning
+                                else -> colors.success
                             }
                             Box(
                                 modifier = Modifier
@@ -170,38 +237,42 @@ fun MapDashboardScreen(
                                     .background(dotColor)
                             )
                             Text(
-                                text = uiState.status.modeDisplayLabel,
+                                text = if (uiState.robotSocketConnected) {
+                                    uiState.status.modeDisplayLabel
+                                } else {
+                                    "DISCONNECTED"
+                                },
                                 style = MaterialTheme.typography.titleSmall,
                                 color = colors.textPrimary
                             )
                         }
                         Text(
                             text = if (uiState.robotSocketConnected) {
-                                "Robot TCP :8081 Live"
+                                "ONLINE • SN ${uiState.connectedRobotSn ?: uiState.status.sn.ifBlank { "Connected" }} • Pings: ${uiState.heartbeatCount}"
                             } else {
-                                "Local Sim • ${uiState.localLanIp}:8080"
+                                "Waiting on ${uiState.localLanIp}:8081 (TCP)"
                             },
                             style = MaterialTheme.typography.labelSmall,
-                            color = colors.textSecondary
+                            color = if (uiState.robotSocketConnected) colors.success else colors.textSecondary
                         )
                     }
 
-                    // Tabular Metrics (Battery %, Area m², Time min)
+                    // Tabular Metrics (shown as '--' when offline)
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         TelemetryStatItem(
-                            value = "${uiState.status.battery}%",
+                            value = if (uiState.robotSocketConnected) "${uiState.status.battery}%" else "--%",
                             label = "BATT",
-                            accent = if (uiState.status.battery > 25) colors.success else colors.warning
+                            accent = if (uiState.robotSocketConnected) colors.success else colors.textTertiary
                         )
                         TelemetryStatItem(
-                            value = "${uiState.status.cleanAreaM2}",
+                            value = if (uiState.robotSocketConnected) "${uiState.status.cleanAreaM2}" else "--",
                             label = "m²",
-                            accent = colors.accentCyan
+                            accent = if (uiState.robotSocketConnected) colors.accentCyan else colors.textTertiary
                         )
                         TelemetryStatItem(
-                            value = "${uiState.status.cleanTimeSec / 60}",
+                            value = if (uiState.robotSocketConnected) "${uiState.status.cleanTimeSec / 60}" else "--",
                             label = "MIN",
-                            accent = colors.textPrimary
+                            accent = if (uiState.robotSocketConnected) colors.textPrimary else colors.textTertiary
                         )
                     }
                 }
@@ -209,7 +280,8 @@ fun MapDashboardScreen(
                 // Quick Circular Glass Buttons (Locate Beep & Manual D-Pad)
                 CircularGlassIconButton(
                     icon = Icons.Default.VolumeUp,
-                    contentDescription = "Locate vacuum beep",
+                    contentDescription = "Locate vacuum beep (test control)",
+                    isActive = uiState.robotSocketConnected,
                     size = 48.dp,
                     onClick = { viewModel.locateRobotBeep() }
                 )
@@ -222,29 +294,34 @@ fun MapDashboardScreen(
                 )
             }
 
-            // Live-Activity Morphing Capsule Banner for protocol feedback
+            // Live-Activity Morphing Capsule Banner for real protocol feedback
             MorphingStatusCapsule(
                 title = uiState.lastActionBanner,
-                subtitle = "Pose: (${uiState.status.posMm.xMm}, ${uiState.status.posMm.yMm}) mm • Suction: ${uiState.status.suction.label} • Water: ${uiState.status.waterLevel}/4 • Path pts: ${uiState.path.points.size}",
-                accentDotColor = if (uiState.status.mode == "sweep") colors.accentCyan else colors.accent,
-                progressFraction = (uiState.status.battery / 100f).coerceIn(0.05f, 1f),
+                subtitle = if (uiState.robotSocketConnected) {
+                    "Robot IP: ${uiState.connectedRobotAddress ?: "connected"} • Pose: (${uiState.status.posMm.xMm}, ${uiState.status.posMm.yMm}) mm • Suction: ${uiState.status.suction.label} • Water: ${uiState.status.waterLevel}/4"
+                } else {
+                    "No TCP client on ${uiState.localLanIp}:8081 yet. Open 'Pairing & HA' tab to verify connection or re-home."
+                },
+                accentDotColor = if (uiState.robotSocketConnected) colors.success else colors.danger,
+                progressFraction = if (uiState.robotSocketConnected) (uiState.status.battery / 100f).coerceIn(0.05f, 1f) else null,
                 modifier = Modifier.fillMaxWidth()
             )
 
-            // Morphing Segmented Glass Pill for Map Interaction Mode
-            LivingFlowSegmentedControl(
-                items = MapInteractionMode.entries,
-                selectedItem = uiState.mapInteractionMode,
-                labelProvider = { it.label },
-                onSelect = { viewModel.setMapInteractionMode(it) },
-                modifier = Modifier.fillMaxWidth()
-            )
+            // Only show map interaction toolbar when a real map is present
+            if (realMap != null) {
+                LivingFlowSegmentedControl(
+                    items = MapInteractionMode.entries,
+                    selectedItem = uiState.mapInteractionMode,
+                    labelProvider = { it.label },
+                    onSelect = { viewModel.setMapInteractionMode(it) },
+                    modifier = Modifier.fillMaxWidth()
+                )
 
-            // Contextual Floating Glass Sub-Island based on active MapInteractionMode
-            MapContextualSubIsland(
-                uiState = uiState,
-                viewModel = viewModel
-            )
+                MapContextualSubIsland(
+                    uiState = uiState,
+                    viewModel = viewModel
+                )
+            }
         }
 
         // 3. Floating Glass.Thick Control Sheet above the Bottom Navigation Island
@@ -261,7 +338,7 @@ fun MapDashboardScreen(
                     .livingFlowGlass(
                         level = GlassMaterialLevel.THICK,
                         cornerRadius = tokens.radii.xl,
-                        isActive = uiState.status.mode == "sweep"
+                        isActive = uiState.robotSocketConnected
                     )
                     .pointerInput(Unit) {
                         detectVerticalDragGestures { _, dragAmount ->
@@ -312,7 +389,6 @@ fun MapDashboardScreen(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Main Smart Clean / Selected Clean Pill
                     val hasSelection = uiState.selectedRoomLabels.isNotEmpty() || uiState.selectedZoneIds.isNotEmpty()
                     LivingFlowPillButton(
                         text = when {
@@ -328,7 +404,6 @@ fun MapDashboardScreen(
                         modifier = Modifier.weight(1.3f)
                     )
 
-                    // Deep 2x Clean Pill
                     LivingFlowPillButton(
                         text = "Deep 2x",
                         icon = Icons.Default.CleaningServices,
@@ -337,7 +412,6 @@ fun MapDashboardScreen(
                         modifier = Modifier.weight(0.95f)
                     )
 
-                    // Pause / Resume Circular Glass Button
                     CircularGlassIconButton(
                         icon = if (isCleaning) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = if (isCleaning) "Pause cleaning" else "Resume cleaning",
@@ -346,7 +420,6 @@ fun MapDashboardScreen(
                         onClick = { viewModel.pauseOrResumeCleaning() }
                     )
 
-                    // Return to Dock Circular Glass Button
                     CircularGlassIconButton(
                         icon = Icons.Default.Home,
                         contentDescription = "Return to charging dock",
@@ -356,10 +429,8 @@ fun MapDashboardScreen(
                     )
                 }
 
-                // Expandable Suction, Mop Water Level (Comet Seek Bar), Y-Mop & Auto-Empty Controls
                 AnimatedVisibility(visible = sheetExpanded) {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        // Suction Level Segmented Pill (`21022`)
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -385,7 +456,6 @@ fun MapDashboardScreen(
                             )
                         }
 
-                        // Luminous Comet Seek Bar for Mop Water Level (`21024 setWaterPump`)
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -421,7 +491,6 @@ fun MapDashboardScreen(
                             )
                         }
 
-                        // Y-Shaped Mop Switch + Stop + Dust Station Empty
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -442,7 +511,7 @@ fun MapDashboardScreen(
                                         color = colors.textPrimary
                                     )
                                     Text(
-                                        text = "21005 cleanType=2",
+                                        text = "21005 pathType=y_word",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = colors.textSecondary
                                     )
@@ -469,12 +538,12 @@ fun MapDashboardScreen(
         }
     }
 
-    // 4. Glass.Thick Modal Dialog for Manual D-Pad Remote Control (`21020`)
     if (showRemoteModal) {
         RemoteControlGlassDialog(
             uiState = uiState,
             onStep = { viewModel.sendRemoteControlStep(it) },
             onSpotHere = { viewModel.spotCleanHere() },
+            onBeep = { viewModel.locateRobotBeep() },
             onDismiss = onDismissRemoteModal
         )
     }
@@ -530,7 +599,7 @@ private fun MapContextualSubIsland(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Tap rooms:",
+                        text = if (uiState.roomNames.isEmpty()) "No segmented rooms in map yet" else "Tap rooms:",
                         style = MaterialTheme.typography.labelSmall,
                         color = colors.textSecondary
                     )
@@ -566,7 +635,6 @@ private fun MapContextualSubIsland(
 
             MapInteractionMode.EDIT_ZONES -> {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // Zone Kind Selector
                     val drawKinds = listOf(
                         ZoneKind.CLEAN_NORMAL,
                         ZoneKind.CLEAN_DEEP,
@@ -616,7 +684,6 @@ private fun MapContextualSubIsland(
                         }
                     }
 
-                    // Existing saved zones chips with delete action
                     if (uiState.regions.isNotEmpty()) {
                         Row(
                             modifier = Modifier
@@ -725,7 +792,7 @@ private fun MapContextualSubIsland(
                             color = colors.textPrimary
                         )
                         Text(
-                            text = "Watershed auto-segmentation autoAreaId=${uiState.map.autoAreaId}",
+                            text = "Watershed auto-segmentation autoAreaId=${uiState.map?.autoAreaId ?: 0}",
                             style = MaterialTheme.typography.labelSmall,
                             color = colors.textSecondary
                         )
@@ -742,17 +809,12 @@ private fun MapContextualSubIsland(
     }
 }
 
-/**
- * **Glass.Thick D-Pad Manual Remote Control Modal (`COMPONENT RULES` §10 & `infoType: 21020`):**
- * - Centered `glass.thick` card with `radius.xl = 32.dp` and contour glow.
- * - Sends `ctrlCode` `3005` (Forward), `3006` (Backward), `3007` (Rotate Left), `3008` (Rotate Right),
- *   `3001` (Spot Clean Here), and `4000` (Exit Remote Mode).
- */
 @Composable
 private fun RemoteControlGlassDialog(
     uiState: VacuumUiState,
     onStep: (Int) -> Unit,
     onSpotHere: () -> Unit,
+    onBeep: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val tokens = LivingFlowTheme.tokens
@@ -768,7 +830,7 @@ private fun RemoteControlGlassDialog(
                 .livingFlowGlass(
                     level = GlassMaterialLevel.THICK,
                     cornerRadius = tokens.radii.xl,
-                    isActive = true
+                    isActive = uiState.robotSocketConnected
                 )
                 .padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -779,16 +841,20 @@ private fun RemoteControlGlassDialog(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Manual D-Pad Remote",
                         style = MaterialTheme.typography.titleMedium,
                         color = colors.textPrimary
                     )
                     Text(
-                        text = "Channel-B infoType 21020 • Pose (${uiState.status.posMm.xMm}, ${uiState.status.posMm.yMm}) mm",
+                        text = if (uiState.robotSocketConnected) {
+                            "LIVE (${uiState.connectedRobotAddress}) • infoType 21020"
+                        } else {
+                            "OFFLINE — Robot not connected to TCP :8081"
+                        },
                         style = MaterialTheme.typography.labelSmall,
-                        color = colors.textSecondary
+                        color = if (uiState.robotSocketConnected) colors.success else colors.danger
                     )
                 }
                 CircularGlassIconButton(
@@ -802,7 +868,6 @@ private fun RemoteControlGlassDialog(
                 )
             }
 
-            // D-Pad Cluster with elastic press & rebound
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -810,7 +875,7 @@ private fun RemoteControlGlassDialog(
                 CircularGlassIconButton(
                     icon = Icons.Default.ArrowUpward,
                     contentDescription = "Forward (+0.3 m/s, ctrlCode 3005)",
-                    isActive = true,
+                    isActive = uiState.robotSocketConnected,
                     size = 64.dp,
                     onClick = { onStep(3005) }
                 )
@@ -847,15 +912,27 @@ private fun RemoteControlGlassDialog(
                 )
             }
 
-            LivingFlowPillButton(
-                text = "Exit Remote Mode (ctrlCode 4000)",
-                variant = FluidButtonVariant.SECONDARY_GLASS,
-                onClick = {
-                    onStep(4000)
-                    onDismiss()
-                },
-                modifier = Modifier.fillMaxWidth()
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                LivingFlowPillButton(
+                    text = "Beep Test (3010)",
+                    icon = Icons.Default.VolumeUp,
+                    variant = FluidButtonVariant.TONAL_ACCENT,
+                    onClick = onBeep,
+                    modifier = Modifier.weight(1f)
+                )
+                LivingFlowPillButton(
+                    text = "Exit (4000)",
+                    variant = FluidButtonVariant.SECONDARY_GLASS,
+                    onClick = {
+                        onStep(4000)
+                        onDismiss()
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+            }
         }
     }
 }

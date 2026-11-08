@@ -62,20 +62,21 @@ data class VacuumStatus(
         get() = errorState.firstOrNull { it != 0 } ?: 0
 
     val modeDisplayLabel: String
-        get() = when (mode.lowercase()) {
-            "sweep" -> when (subMode.lowercase()) {
+        get() = when {
+            !isOnline || mode.equals("offline", ignoreCase = true) -> "Offline (Waiting for Robot)"
+            mode.equals("sweep", ignoreCase = true) -> when (subMode.lowercase()) {
                 "depth", "depthtotalclean" -> "Deep Cleaning (2x)"
                 "appointclean" -> "Room / Zone Clean"
                 "point", "curpoint" -> "Spot Cleaning"
                 else -> "Smart Cleaning"
             }
-            "pause" -> "Paused"
-            "backcharge" -> "Returning to Dock"
-            "charge" -> "Charging"
-            "fullcharge" -> "Fully Charged"
-            "rfctrl" -> "Manual Remote"
-            "dustcenterworking" -> "Emptying Dustbin"
-            else -> "Standby / Idle"
+            mode.equals("pause", ignoreCase = true) -> "Paused"
+            mode.equals("backcharge", ignoreCase = true) -> "Returning to Dock"
+            mode.equals("charge", ignoreCase = true) -> "Charging"
+            mode.equals("fullcharge", ignoreCase = true) -> "Fully Charged"
+            mode.equals("rfctrl", ignoreCase = true) -> "Manual Remote"
+            mode.equals("dustcenterworking", ignoreCase = true) -> "Emptying Dustbin"
+            else -> "Standby (${mode})"
         }
 }
 
