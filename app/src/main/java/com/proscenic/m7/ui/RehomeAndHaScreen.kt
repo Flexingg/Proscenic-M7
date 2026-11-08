@@ -241,7 +241,7 @@ fun RehomeAndHaScreen(
                             } else {
                                 FluidButtonVariant.SECONDARY_GLASS
                             },
-                            onClick = { viewModel.locateRobot() },
+                            onClick = { viewModel.locateRobotBeep() },
                             modifier = Modifier.weight(1f)
                         )
                         LivingFlowPillButton(
