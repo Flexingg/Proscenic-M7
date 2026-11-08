@@ -259,10 +259,11 @@ private fun ScheduleCalmCard(
     val tokens = LivingFlowTheme.tokens
     val colors = tokens.colors
     val dayNames = listOf("S", "M", "T", "W", "T", "F", "S")
+    val isWholeHome = -1 in entry.cleanIds || entry.cleanIds.isEmpty()
 
     InsetGroupedCalmCard(
         title = entry.label,
-        subtitle = "${entry.fanLevel.label} Suction • ${entry.passes}x Pass • ${if (entry.cleanMode == CleanModeType.WHOLE_HOME) "Whole Home (cleanMode=1)" else "Saved Zones (cleanMode=2)"}",
+        subtitle = "${entry.suction.label} Suction • ${entry.passes}x Pass • ${if (isWholeHome) "Whole Home (cleanMode=1)" else "Saved Zones (cleanMode=2)"}",
         isActive = entry.enabled,
         trailingHeader = {
             Row(
@@ -298,7 +299,7 @@ private fun ScheduleCalmCard(
             // Circular 7-day repeat badges (`Sun`..`Sat` bitmask)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 dayNames.forEachIndexed { idx, letter ->
-                    val activeDay = idx in entry.repeatDays
+                    val activeDay = idx in entry.daysOfWeek
                     Box(
                         modifier = Modifier
                             .size(30.dp)
@@ -345,7 +346,7 @@ private fun AddScheduleGlassDialog(
     var selectedDays by remember { mutableStateOf(setOf(1, 2, 3, 4, 5)) }
     var suction by remember { mutableStateOf(SuctionLevel.AUTO) }
     var passes by remember { mutableIntStateOf(1) }
-    var cleanMode by remember { mutableStateOf(CleanModeType.WHOLE_HOME) }
+    var wholeHomeScope by remember { mutableStateOf(true) }
 
     val dayLabels = listOf("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
 
@@ -464,7 +465,7 @@ private fun AddScheduleGlassDialog(
                 color = colors.textPrimary
             )
             LivingFlowSegmentedControl(
-                items = listOf(SuctionLevel.ECO, SuctionLevel.AUTO, SuctionLevel.STRONG, SuctionLevel.MAX),
+                items = listOf(SuctionLevel.QUIET, SuctionLevel.AUTO, SuctionLevel.STRONG, SuctionLevel.MAX),
                 selectedItem = suction,
                 labelProvider = { it.label },
                 onSelect = { suction = it },
@@ -478,10 +479,10 @@ private fun AddScheduleGlassDialog(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 LivingFlowSegmentedControl(
-                    items = listOf(CleanModeType.WHOLE_HOME, CleanModeType.ZONES),
-                    selectedItem = cleanMode,
-                    labelProvider = { if (it == CleanModeType.WHOLE_HOME) "Whole Home" else "Saved Zones" },
-                    onSelect = { cleanMode = it },
+                    items = listOf(true, false),
+                    selectedItem = wholeHomeScope,
+                    labelProvider = { if (it) "Whole Home" else "Saved Zones" },
+                    onSelect = { wholeHomeScope = it },
                     modifier = Modifier.weight(1f)
                 )
                 Spacer(Modifier.size(10.dp))
@@ -507,9 +508,9 @@ private fun AddScheduleGlassDialog(
                             enabled = true,
                             hour = h,
                             minute = m,
-                            repeatDays = selectedDays,
-                            cleanMode = cleanMode,
-                            fanLevel = suction,
+                            daysOfWeek = selectedDays,
+                            cleanIds = if (wholeHomeScope) listOf(-1, -3) else listOf(1, 2, -3),
+                            suction = suction,
                             passes = passes
                         )
                     )

@@ -57,6 +57,26 @@ data class VacuumStatus(
 ) {
     val headingRad: Float
         get() = phiMrad / 1000f
+
+    val errorCode: Int
+        get() = errorState.firstOrNull { it != 0 } ?: 0
+
+    val modeDisplayLabel: String
+        get() = when (mode.lowercase()) {
+            "sweep" -> when (subMode.lowercase()) {
+                "depth", "depthtotalclean" -> "Deep Cleaning (2x)"
+                "appointclean" -> "Room / Zone Clean"
+                "point", "curpoint" -> "Spot Cleaning"
+                else -> "Smart Cleaning"
+            }
+            "pause" -> "Paused"
+            "backcharge" -> "Returning to Dock"
+            "charge" -> "Charging"
+            "fullcharge" -> "Fully Charged"
+            "rfctrl" -> "Manual Remote"
+            "dustcenterworking" -> "Emptying Dustbin"
+            else -> "Standby / Idle"
+        }
 }
 
 /**

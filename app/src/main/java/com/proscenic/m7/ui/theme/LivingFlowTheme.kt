@@ -131,19 +131,19 @@ data class LivingFlowMotion(
     val reducedMotion: Boolean = false
 ) {
     /** `spring.press`: stiffness 800, dampingRatio 0.80 -> scale 0.95–0.97 within ~90ms */
-    fun <T> pressSpring(): AnimationSpec<T> =
+    fun <T> pressSpring(): androidx.compose.animation.core.FiniteAnimationSpec<T> =
         if (reducedMotion) tween(90) else spring(dampingRatio = 0.80f, stiffness = 800f)
 
     /** `spring.release` (rebound): stiffness 450, dampingRatio 0.55 -> ~3–5% overshoot, settles ~380ms */
-    fun <T> releaseSpring(): AnimationSpec<T> =
+    fun <T> releaseSpring(): androidx.compose.animation.core.FiniteAnimationSpec<T> =
         if (reducedMotion) tween(140) else spring(dampingRatio = 0.55f, stiffness = 450f)
 
     /** `spring.morph` (container transforms, island pill, sheets): stiffness 380, dampingRatio 0.82 */
-    fun <T> morphSpring(): AnimationSpec<T> =
+    fun <T> morphSpring(): androidx.compose.animation.core.FiniteAnimationSpec<T> =
         if (reducedMotion) tween(150) else spring(dampingRatio = 0.82f, stiffness = 380f)
 
     /** `spring.gentle` (fades, color, glow): stiffness 200, dampingRatio 1.0 */
-    fun <T> gentleSpring(): AnimationSpec<T> =
+    fun <T> gentleSpring(): androidx.compose.animation.core.FiniteAnimationSpec<T> =
         if (reducedMotion) tween(150) else spring(dampingRatio = 1.0f, stiffness = 200f)
 }
 

@@ -320,23 +320,23 @@ fun RehomeAndHaScreen(
                                     Icon(
                                         imageVector = Icons.Default.CheckCircle,
                                         contentDescription = null,
-                                        tint = if (step.succeeded) colors.success else colors.danger,
+                                        tint = if (step.success) colors.success else colors.danger,
                                         modifier = Modifier.size(16.dp)
                                     )
                                     Column {
                                         Text(
-                                            text = "Step ${step.stepNumber}: ${step.title}",
+                                            text = "Step ${step.step}: ${step.title}",
                                             style = MaterialTheme.typography.labelLarge,
                                             color = colors.textPrimary
                                         )
                                         Text(
-                                            text = "TX: ${step.sentJson}",
+                                            text = "TX: ${step.txJson}",
                                             style = MaterialTheme.typography.labelSmall,
                                             fontFamily = FontFamily.Monospace,
                                             color = colors.accentCyan
                                         )
                                         Text(
-                                            text = "RX: ${step.receivedReply}",
+                                            text = "RX: ${step.rxJson}",
                                             style = MaterialTheme.typography.labelSmall,
                                             fontFamily = FontFamily.Monospace,
                                             color = colors.textSecondary
@@ -443,7 +443,7 @@ fun RehomeAndHaScreen(
                         } else {
                             uiState.wireTraces.take(12).forEach { trace ->
                                 Text(
-                                    text = "[${trace.channel} ${trace.direction}] (${trace.infoType}) ${trace.summary}",
+                                    text = "[${trace.channel} ${trace.direction}] ${trace.summary}",
                                     style = MaterialTheme.typography.labelSmall,
                                     fontFamily = FontFamily.Monospace,
                                     color = if (trace.direction == "TX") colors.accentCyan else colors.success
