@@ -125,7 +125,6 @@ fun RehomeAndHaScreen(
                 json_attributes:
                   - battery
                   - suction
-                  - waterLevel
                   - cleanAreaM2
                   - cleanTimeSec
                   - posXMm

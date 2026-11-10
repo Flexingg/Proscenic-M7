@@ -220,7 +220,6 @@ object MapExportManager {
             if (reg.verticesMm.size < 3) continue
             val strokeColor = when (reg.kind) {
                 ZoneKind.NO_GO -> 0xFFEF4444.toInt()
-                ZoneKind.NO_MOP -> 0xFFF59E0B.toInt()
                 ZoneKind.NO_SWEEP -> 0xFFEC4899.toInt()
                 ZoneKind.CLEAN_DEEP -> 0xFF06B6D4.toInt()
                 ZoneKind.CLEAN_NORMAL -> 0xFF22C55E.toInt()

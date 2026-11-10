@@ -12,8 +12,7 @@ enum class SuctionLevel(val wireValue: String, val label: String) {
     QUIET("quiet", "Quiet"),
     AUTO("auto", "Standard"),
     STRONG("strong", "Strong"),
-    MAX("max", "Max"),
-    MOP("mop", "Mop Only");
+    MAX("max", "Max");
 
     companion object {
         fun fromWire(value: String?): SuctionLevel =
@@ -22,9 +21,7 @@ enum class SuctionLevel(val wireValue: String, val label: String) {
 }
 
 enum class CleanModeType(val wireValue: String, val label: String) {
-    SWEEP_ONLY("sweepOnly", "Vacuum Only"),
-    MOP_ONLY("mopOnly", "Mop Only"),
-    SWEEP_MOP("sweepMop", "Vacuum + Mop");
+    SWEEP_ONLY("sweepOnly", "Vacuum Only");
 
     companion object {
         fun fromWire(value: String?): CleanModeType =
@@ -43,7 +40,6 @@ data class VacuumStatus(
     val cleanAreaM2: Float = 0f,          // cleanArea
     val cleanTimeSec: Int = 0,            // cleanTime
     val suction: SuctionLevel = SuctionLevel.AUTO, // workNoisy
-    val waterLevel: Int = 2,              // water (1..4)
     val volume: Int = 8,                  // vol (0..10)
     val isMuted: Boolean = false,         // mute
     val ledSwitch: Boolean = true,        // led
@@ -107,7 +103,6 @@ enum class ZoneKind(
     CLEAN_NORMAL("Clean Zone", "normal", "all", "area"),
     CLEAN_DEEP("Deep Clean (2x)", "depth", "all", "area"),
     NO_GO("No-Go Zone", "forbid", "all", "area"),
-    NO_MOP("No-Mop Zone", "forbid", "mop", "area"),
     NO_SWEEP("No-Vacuum Zone", "forbid", "sweep", "area"),
     PLACED_SPOT("Spot Target (1.5m)", "normal", "all", "point");
 
@@ -119,7 +114,6 @@ enum class ZoneKind(
             if (mode == "point" || mode == "curpoint") return PLACED_SPOT
             return when (active) {
                 "forbid" -> when (forbidType) {
-                    "mop" -> NO_MOP
                     "sweep" -> NO_SWEEP
                     else -> NO_GO
                 }
@@ -455,6 +449,5 @@ data class ConsumablesStatus(
     val sideBrushSec: Int = 14_400,
     val rollBrushSec: Int = 28_800,
     val filterSec: Int = 18_000,
-    val mopSec: Int = 7_200,
     val sensorSec: Int = 10_800
 )

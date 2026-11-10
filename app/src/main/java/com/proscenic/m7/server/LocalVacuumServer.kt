@@ -8,6 +8,7 @@ import com.proscenic.m7.protocol.QuietHoursConfig
 import com.proscenic.m7.protocol.ScheduleEntry
 import com.proscenic.m7.protocol.VacuumMap
 import com.proscenic.m7.protocol.VacuumStatus
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -72,7 +73,10 @@ class LocalVacuumServer(
         val payload: String
     )
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // Any uncaught exception in a socket/handler coroutine would otherwise crash the whole app.
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, _ -> }
+    )
     private var httpJob: Job? = null
     private var gatewayJob: Job? = null
     private var httpServerSocket: ServerSocket? = null
@@ -186,7 +190,8 @@ class LocalVacuumServer(
             while (scope.isActive && _isRunning.value) {
                 val client = server.accept()
                 scope.launch {
-                    handleGatewayClient(client)
+                    runCatching { handleGatewayClient(client) }
+                    runCatching { client.close() }
                 }
             }
         } catch (_: Exception) {
@@ -301,7 +306,8 @@ class LocalVacuumServer(
             while (scope.isActive && _isRunning.value) {
                 val client = server.accept()
                 scope.launch {
-                    handleHttpClient(client)
+                    runCatching { handleHttpClient(client) }
+                    runCatching { client.close() }
                 }
             }
         } catch (_: Exception) {
@@ -416,7 +422,6 @@ class LocalVacuumServer(
                     put("raw_mode", s.mode)
                     put("battery_level", s.battery)
                     put("fan_speed", s.suction.wireValue)
-                    put("water_level", s.waterLevel)
                     put("clean_area_m2", s.cleanAreaM2)
                     put("clean_time_sec", s.cleanTimeSec)
                     put("position_mm", JSONArray().put(s.posMm.xMm).put(s.posMm.yMm))
@@ -482,6 +487,19 @@ class LocalVacuumServer(
         innerData: JSONObject,
         message: String = "",
         rawJson: String = ""
+    ) {
+        try {
+            dispatchRobotInfoPayloadUnsafe(infoType, innerData, message, rawJson)
+        } catch (_: Exception) {
+            // Malformed robot payload — never let it take down the app
+        }
+    }
+
+    private fun dispatchRobotInfoPayloadUnsafe(
+        infoType: Int,
+        innerData: JSONObject,
+        message: String,
+        rawJson: String
     ) {
         when (infoType) {
             20001 -> {

@@ -47,7 +47,6 @@ import androidx.compose.material.icons.filled.RotateLeft
 import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.VolumeUp
-import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -83,7 +82,6 @@ import com.proscenic.m7.ui.components.InsetGroupedCalmCard
 import com.proscenic.m7.ui.components.LivingFlowPillButton
 import com.proscenic.m7.ui.components.LivingFlowSegmentedControl
 import com.proscenic.m7.ui.components.LivingFlowSwitch
-import com.proscenic.m7.ui.components.LuminousCometSlider
 import com.proscenic.m7.ui.components.MorphingStatusCapsule
 import com.proscenic.m7.ui.theme.GlassMaterialLevel
 import com.proscenic.m7.ui.theme.LivingFlowHaptic
@@ -285,9 +283,9 @@ fun MapDashboardScreen(
                         }
                         Text(
                             text = if (uiState.robotSocketConnected) {
-                                "ONLINE • SN ${uiState.connectedRobotSn ?: uiState.status.sn.ifBlank { "Connected" }} • Pings: ${uiState.heartbeatCount}"
+                                "Online • ${uiState.connectedRobotSn ?: uiState.status.sn.ifBlank { "Connected" }}"
                             } else {
-                                "Waiting on ${uiState.localLanIp}:8081 (TCP)"
+                                "Waiting for robot"
                             },
                             style = MaterialTheme.typography.labelSmall,
                             color = if (uiState.robotSocketConnected) colors.success else colors.textSecondary
@@ -343,9 +341,9 @@ fun MapDashboardScreen(
             MorphingStatusCapsule(
                 title = uiState.lastActionBanner,
                 subtitle = if (uiState.robotSocketConnected) {
-                    "Robot IP: ${uiState.connectedRobotAddress ?: "connected"} • Pose: (${uiState.status.posMm.xMm}, ${uiState.status.posMm.yMm}) mm • Suction: ${uiState.status.suction.label} • Water: ${uiState.status.waterLevel}/4"
+                    "Robot ${uiState.connectedRobotAddress ?: "connected"} • Suction: ${uiState.status.suction.label}"
                 } else {
-                    "No TCP client on ${uiState.localLanIp}:8081 yet. Tap 'Scan & Reconnect' or open 'Pairing & HA'."
+                    "Not connected. Open 'Pairing & HA' to reconnect."
                 },
                 accentDotColor = when {
                     !uiState.robotSocketConnected -> colors.danger
@@ -379,7 +377,7 @@ fun MapDashboardScreen(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Tap 'Wake Robot' below, or press the physical Power button on the vacuum (or place it on its charging dock) so it wakes to 'Ready' and accepts motor commands.",
+                            text = "Tap 'Wake Robot', or press the Power button on the vacuum.",
                             style = MaterialTheme.typography.labelSmall,
                             color = colors.textPrimary
                         )
@@ -459,7 +457,7 @@ fun MapDashboardScreen(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            text = if (sheetExpanded) "Swipe down to compact controls" else "Swipe up for Suction, Mop Water & Y-Mop",
+                            text = if (sheetExpanded) "Swipe down for fewer controls" else "Swipe up for more controls",
                             style = MaterialTheme.typography.labelSmall,
                             color = colors.textSecondary
                         )
@@ -523,7 +521,7 @@ fun MapDashboardScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text(
-                                    text = "Suction Power (infoType 21022)",
+                                    text = "Suction",
                                     style = MaterialTheme.typography.labelLarge,
                                     color = colors.textPrimary
                                 )
@@ -542,68 +540,11 @@ fun MapDashboardScreen(
                             )
                         }
 
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.WaterDrop,
-                                        contentDescription = null,
-                                        tint = colors.accentCyan,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Text(
-                                        text = "Mop Water Flow (21024)",
-                                        style = MaterialTheme.typography.labelLarge,
-                                        color = colors.textPrimary
-                                    )
-                                }
-                                Text(
-                                    text = "Level ${uiState.status.waterLevel} / 4",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = colors.accentCyan
-                                )
-                            }
-                            LuminousCometSlider(
-                                value = uiState.status.waterLevel,
-                                valueRange = 1..4,
-                                onValueChange = { viewModel.setWaterLevel(it) }
-                            )
-                        }
-
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            horizontalArrangement = Arrangement.End,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                LivingFlowSwitch(
-                                    checked = uiState.yShapedMopEnabled,
-                                    onCheckedChange = { viewModel.toggleYShapedMop(it) }
-                                )
-                                Column {
-                                    Text(
-                                        text = "Y-Shaped Scrubbing",
-                                        style = MaterialTheme.typography.labelLarge,
-                                        color = colors.textPrimary
-                                    )
-                                    Text(
-                                        text = "21005 pathType=y_word",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = colors.textSecondary
-                                    )
-                                }
-                            }
-
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 LivingFlowPillButton(
                                     text = "Empty Bin",
@@ -699,7 +640,7 @@ private fun MapContextualSubIsland(
                     )
                     if (uiState.roomNames.isEmpty()) {
                         LivingFlowPillButton(
-                            text = "Segment Rooms Now (21030)",
+                            text = "Detect Rooms",
                             icon = Icons.Default.Refresh,
                             variant = FluidButtonVariant.TONAL_ACCENT,
                             onClick = { viewModel.resetRoomSegmentation() }
@@ -740,8 +681,7 @@ private fun MapContextualSubIsland(
                     val drawKinds = listOf(
                         ZoneKind.CLEAN_NORMAL,
                         ZoneKind.CLEAN_DEEP,
-                        ZoneKind.NO_GO,
-                        ZoneKind.NO_MOP
+                        ZoneKind.NO_GO
                     )
                     Row(
                         modifier = Modifier
