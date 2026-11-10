@@ -67,7 +67,7 @@ import kotlin.math.sin
  *    `0x01..0xFE` auto-segmented room labels with distinct pastel colors).
  * 3. **AI Map Art** top-down orthographic object sprites scaled to fit their exact real-world millimeter
  *    footprints (`widthMm × heightMm`) and rotated by `rotationDeg`.
- * 4. Stored & live-drawn polygon regions (`CLEAN_NORMAL`, `CLEAN_DEEP`, `NO_GO`, `NO_MOP`, `PLACED_SPOT`).
+ * 4. Stored & live-drawn polygon regions (`CLEAN_NORMAL`, `CLEAN_DEEP`, `NO_GO`, `PLACED_SPOT`).
  * 5. Real-time cleaning trail (`infoType: 21011`), Charging Station, and Vacuum Robot pose.
  */
 @Composable
@@ -389,12 +389,11 @@ fun FloorMapCanvas(
                 )
             }
 
-            // 3. Draw stored regions (Clean Zones, Deep Clean Zones, No-Go Zones, No-Mop Zones)
+            // 3. Draw stored regions (Clean Zones, Deep Clean Zones, No-Go Zones)
             for (region in regions) {
                 if (region.verticesMm.size < 3) continue
                 val strokeColor = when (region.kind) {
                     ZoneKind.NO_GO -> Color(0xFFEF4444)
-                    ZoneKind.NO_MOP -> Color(0xFFF59E0B)
                     ZoneKind.NO_SWEEP -> Color(0xFFEC4899)
                     ZoneKind.CLEAN_DEEP -> Color(0xFF06B6D4)
                     ZoneKind.CLEAN_NORMAL -> Color(0xFF22C55E)

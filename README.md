@@ -19,7 +19,7 @@ A zero-cloud, local-first Android application and embedded replacement server fo
    - Displays room names at centroids, live robot pose (`posX`, `posY`, `phi` mrad), charging dock, and `21011` cleaning trails.
 
 4. **Zones, No-Go / No-Mop Polygons, Room Selection & Placed Spot Clean**
-   - Draw rectangular `CLEAN_NORMAL`, `CLEAN_DEEP (2x)`, `NO_GO`, and `NO_MOP` zones (`21003 SetAreaTactics`, snapped to the 50 mm grid and truncated to $\le 31$ UTF-8 bytes to prevent the `task_manager` stack buffer overflow).
+   - Draw rectangular `CLEAN_NORMAL`, `CLEAN_DEEP (2x)`, `NO_GO` zones (`21003 SetAreaTactics`, snapped to the 50 mm grid and truncated to $\le 31$ UTF-8 bytes to prevent the `task_manager` stack buffer overflow).
    - Dispatches room (`segmentId`) and zone (`cleanId`) cleans using the mandatory 2-step sequence: `21023 ActiveRegions` followed by `21005 {"mode":"appointClean"}`.
    - Split, merge, or reset auto-segmented rooms (`21030`).
 

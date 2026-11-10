@@ -68,22 +68,16 @@ object ProscenicProtocol {
      * Whole-home smart clean (`infoType: 21005`, `mode: "smartClean"`).
      * Note: Overwrites CleanArea shared memory with the whole-map total region.
      */
-    fun buildStartSmartClean(yShapedMop: Boolean = false): String {
+    fun buildStartSmartClean(): String {
         val data = JSONObject().put("mode", "smartClean")
-        if (yShapedMop) {
-            data.put("pathType", "y_word")
-        }
         return buildChannelBFrame(infoType = 21005, data = data)
     }
 
     /**
      * Deep whole-home clean (2x grid pattern, `infoType: 21005`, `mode: "depthTotalClean"`).
      */
-    fun buildStartDeepClean(yShapedMop: Boolean = false): String {
+    fun buildStartDeepClean(): String {
         val data = JSONObject().put("mode", "depthTotalClean")
-        if (yShapedMop) {
-            data.put("pathType", "y_word")
-        }
         return buildChannelBFrame(infoType = 21005, data = data)
     }
 
@@ -390,12 +384,6 @@ object ProscenicProtocol {
         return buildChannelBFrame(infoType = 21022, data = data)
     }
 
-    fun buildSetWaterLevel(level: Int): String {
-        val clamped = level.coerceIn(1, 4)
-        val data = JSONObject().put("cmd", "setWaterPump").put("value", clamped)
-        return buildChannelBFrame(infoType = 21024, data = data)
-    }
-
     fun buildSetVolume(volume0To10: Int): String {
         val clamped = volume0To10.coerceIn(0, 10)
         val data = JSONObject().put("cmd", "setVolume").put("value", clamped)
@@ -485,7 +473,6 @@ object ProscenicProtocol {
             cleanAreaM2 = dataObj.optDouble("cleanArea", previous.cleanAreaM2.toDouble()).toFloat(),
             cleanTimeSec = dataObj.optInt("cleanTime", previous.cleanTimeSec),
             suction = SuctionLevel.fromWire(dataObj.optString("workNoisy", previous.suction.wireValue)),
-            waterLevel = dataObj.optInt("water", previous.waterLevel).coerceIn(1, 4),
             volume = dataObj.optInt("vol", previous.volume).coerceIn(0, 10),
             isMuted = dataObj.optInt("mute", if (previous.isMuted) 1 else 0) == 1,
             ledSwitch = dataObj.optInt("led", if (previous.ledSwitch) 1 else 0) == 1,

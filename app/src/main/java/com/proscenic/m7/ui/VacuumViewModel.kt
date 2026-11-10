@@ -76,7 +76,6 @@ data class VacuumUiState(
     val activeZoneDrawKind: ZoneKind = ZoneKind.CLEAN_NORMAL,
     val placedSpotTargetMm: PointMm = PointMm(0, 0),
     val placedSpotDeepClean: Boolean = false,
-    val yShapedMopEnabled: Boolean = false,
     val mergeFirstRoomLabel: Int? = null,
     // AI Map Art & BYOK State
     val aiArtItems: List<AiMapArtItem> = emptyList(),
@@ -379,6 +378,7 @@ class VacuumViewModel : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             var lastAutoProbedIp = ""
             while (isActive) {
+              try {
                 val currentIp = LocalVacuumServer.getLocalLanIpAddress()
                 if (currentIp != _uiState.value.localLanIp) {
                     _uiState.update { it.copy(localLanIp = currentIp) }
@@ -396,6 +396,11 @@ class VacuumViewModel : ViewModel() {
                         silentAutoRepointOnLan(currentIp)
                     }
                 }
+              } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+              } catch (_: Throwable) {
+                // Network probing failures must never crash the app
+              }
                 delay(3000L)
             }
         }
@@ -465,10 +470,6 @@ class VacuumViewModel : ViewModel() {
         _uiState.update { it.copy(activeZoneDrawKind = kind) }
     }
 
-    fun toggleYShapedMop(enabled: Boolean) {
-        _uiState.update { it.copy(yShapedMopEnabled = enabled) }
-    }
-
     fun setPlacedSpotTarget(pointMm: PointMm) {
         _uiState.update { it.copy(placedSpotTargetMm = pointMm) }
     }
@@ -503,9 +504,9 @@ class VacuumViewModel : ViewModel() {
     fun startWholeHomeClean(deepClean: Boolean = false) {
         val state = _uiState.value
         val frame = if (deepClean) {
-            ProscenicProtocol.buildStartDeepClean(yShapedMop = state.yShapedMopEnabled)
+            ProscenicProtocol.buildStartDeepClean()
         } else {
-            ProscenicProtocol.buildStartSmartClean(yShapedMop = state.yShapedMopEnabled)
+            ProscenicProtocol.buildStartSmartClean()
         }
         if (state.status.isSleepOrShutdown) {
             // Send wake pulse before 21005 start command
@@ -548,12 +549,6 @@ class VacuumViewModel : ViewModel() {
     fun setSuctionLevel(level: SuctionLevel) {
         val frame = ProscenicProtocol.buildSetSuction(level)
         dispatchSingleFrame(frame, "Sent Suction ${level.label} (21022 ${level.wireValue})")
-    }
-
-    fun setWaterLevel(level: Int) {
-        val clamped = level.coerceIn(1, 4)
-        val frame = ProscenicProtocol.buildSetWaterLevel(clamped)
-        dispatchSingleFrame(frame, "Sent Mop Water Level $clamped/4 (21024 setWaterPump)")
     }
 
     fun setSpeakerVolume(vol: Int) {
