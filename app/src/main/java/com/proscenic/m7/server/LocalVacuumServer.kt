@@ -1,5 +1,7 @@
 package com.proscenic.m7.server
 
+import android.graphics.Bitmap
+import com.proscenic.m7.export.MapExportManager
 import com.proscenic.m7.protocol.CleanPath
 import com.proscenic.m7.protocol.ConsumablesStatus
 import com.proscenic.m7.protocol.MapRegion
@@ -22,6 +24,7 @@ import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
+import java.io.ByteArrayOutputStream
 import java.io.InputStreamReader
 import java.io.OutputStream
 import java.net.Inet4Address
@@ -113,6 +116,9 @@ class LocalVacuumServer(
     /** Room names from the app UI, so Home Assistant can show "Kitchen" instead of "Room 3". */
     @Volatile
     var latestRoomNames: Map<Int, String> = emptyMap()
+
+    // Rendering the map is expensive; Home Assistant may poll, so reuse a recent render.
+    private val mapPngCache = AtomicReference<Pair<Long, ByteArray>?>(null)
 
     @Volatile
     var latestConsumables: ConsumablesStatus = ConsumablesStatus()
@@ -348,6 +354,11 @@ class LocalVacuumServer(
             }
             val body = String(bodyChars, 0, totalRead)
 
+            if (method == "GET" && path == "/api/map.png") {
+                writeMapPng(sock)
+                return
+            }
+
             val responseJson = routeHttpRequest(method, path, body, sock)
             val responseBytes = responseJson.toByteArray(Charsets.UTF_8)
             val out = sock.getOutputStream()
@@ -362,6 +373,45 @@ class LocalVacuumServer(
             out.write(responseBytes)
             out.flush()
         }
+    }
+
+    /** Renders the current floor map as a PNG (for the Home Assistant camera). 404 if no map yet. */
+    private fun renderMapPng(): ByteArray? {
+        val map = latestMapSnapshot ?: return null
+        val now = System.currentTimeMillis()
+        mapPngCache.get()?.let { (at, png) -> if (now - at < 3000L) return png }
+        val names = map.roomLabels.associateWith { id -> latestRoomNames[id] ?: "Room $id" }
+        val bitmap = MapExportManager.renderHighResMapBitmap(
+            map = map,
+            status = latestStatusSnapshot,
+            path = latestPathSnapshot,
+            regions = map.areas,
+            roomNames = names,
+            aiArtItems = emptyList()
+        )
+        val png = try {
+            ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
+        } finally {
+            bitmap.recycle()
+        }
+        mapPngCache.set(now to png)
+        return png
+    }
+
+    private fun writeMapPng(sock: Socket) {
+        val png = synchronized(mapPngCache) { renderMapPng() }
+        val out = sock.getOutputStream()
+        val status = if (png != null) "200 OK" else "404 Not Found"
+        val bytes = png ?: "no map yet".toByteArray(Charsets.UTF_8)
+        val headers = buildString {
+            append("HTTP/1.1 $status\r\n")
+            append("Content-Type: ${if (png != null) "image/png" else "text/plain"}\r\n")
+            append("Content-Length: ${bytes.size}\r\n")
+            append("Connection: close\r\n\r\n")
+        }
+        out.write(headers.toByteArray(Charsets.UTF_8))
+        out.write(bytes)
+        out.flush()
     }
 
     private fun routeHttpRequest(method: String, path: String, body: String, sock: Socket): String {
@@ -445,6 +495,7 @@ class LocalVacuumServer(
                 val p = latestPathSnapshot
                 JSONObject().apply {
                     put("has_map", m != null)
+                    put("map_url", "/api/map.png")
                     if (m != null) {
                         put("mapId", m.mapId)
                         put("autoAreaId", m.autoAreaId)
@@ -542,6 +593,8 @@ class LocalVacuumServer(
                     val rObj = arr.optJSONObject(i) ?: continue
                     regions.add(ProscenicProtocol.parseRegion(rObj, fallbackId = i + 1))
                 }
+                // Keep the snapshot (used by /api/map.json and map.png) in sync with robot zones
+                latestMapSnapshot = latestMapSnapshot?.copy(areas = regions)
                 onZonesReceived(regions)
             }
             21002 -> {

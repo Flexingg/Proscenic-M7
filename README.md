@@ -29,7 +29,7 @@ A zero-cloud, local-first Android application and embedded replacement server fo
 
 6. **Home Assistant Local REST API Bridge**
    - Exposes `GET /api/status`, `GET /api/map.json`, and `POST /api/command` on `:8080` with ready-to-copy `configuration.yaml` snippets.
-   - **Full custom integration** in `custom_components/proscenic_m7` (vacuum, sensors, buttons, suction/volume/LED controls, room & zone cleaning services). See [`docs/HOME_ASSISTANT.md`](docs/HOME_ASSISTANT.md).
+   - **Full custom integration** in `custom_components/proscenic_m7` (vacuum, sensors, buttons, suction/volume/LED controls, room & zone cleaning services, floor-map camera, and a scheduled-clean blueprint). See [`docs/HOME_ASSISTANT.md`](docs/HOME_ASSISTANT.md).
 
 7. **ColorOS 17 "Living Flow Design" (流体设计) UI**
    - **Luminous Effect (凝光视效):** Three-tier frosted glass scale (`glass.thin`, `glass.regular`, `glass.thick`), 1dp vertical gradient **Contour Glow**, progressive edge scrims, and **Luminous Comet Seek Bar** for mop water control.

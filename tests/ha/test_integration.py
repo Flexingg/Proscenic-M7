@@ -52,8 +52,8 @@ async def test_states_and_entities(hass: HomeAssistant, bridge):
     assert s.attributes["fan_speed"] == "auto"
     assert s.attributes["rooms"] == {"1": "Kitchen", "2": "Hallway"}
     ids = {e.entity_id for e in er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)}
-    # vacuum + 5 sensors + 3 binary sensors + 3 buttons + select + number + 2 switches
-    assert len(ids) == 16, sorted(ids)
+    # vacuum + camera + 5 sensors + 3 binary sensors + 3 buttons + select + number + 2 switches
+    assert len(ids) == 17, sorted(ids)
     assert hass.states.get("sensor.proscenic_m7_battery").state == "87"
     assert hass.states.get("binary_sensor.proscenic_m7_charging").state == "on"
     assert hass.states.get("number.proscenic_m7_volume").state == "6.0"
@@ -143,3 +143,20 @@ async def test_command_failure_raises(hass: HomeAssistant, bridge):
     await bridge.close()
     with pytest.raises(HomeAssistantError):
         await call(hass, "vacuum", "start", {"entity_id": VAC})
+
+
+async def test_map_camera(hass: HomeAssistant, bridge):
+    from homeassistant.components.camera import async_get_image
+
+    await setup(hass, bridge)
+    image = await async_get_image(hass, "camera.proscenic_m7_map")
+    assert image.content[:4] == b"\x89PNG"
+
+
+async def test_map_camera_no_map(hass: HomeAssistant, bridge):
+    bridge.state["png"] = None
+    await setup(hass, bridge)
+    from homeassistant.components.camera import async_get_image
+
+    with pytest.raises(HomeAssistantError):
+        await async_get_image(hass, "camera.proscenic_m7_map")

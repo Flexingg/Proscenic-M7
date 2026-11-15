@@ -12,6 +12,7 @@ from .coordinator import ProscenicCoordinator
 
 PLATFORMS = [
     "vacuum",
+    "camera",
     "sensor",
     "binary_sensor",
     "button",

@@ -9,6 +9,7 @@ from typing import Any
 import aiohttp
 
 REQUEST_TIMEOUT = 8
+MAP_IMAGE_TIMEOUT = 20  # rendering the PNG on the phone takes a moment
 
 
 class ProscenicApiError(Exception):
@@ -87,6 +88,19 @@ class ProscenicApi:
             # Status is what matters; keep going without map info.
             map_data = {}
         return VacuumData(status=status, map=map_data)
+
+    async def get_map_image(self) -> bytes | None:
+        """Rendered map PNG, or None if the app has no map yet (404)."""
+        try:
+            async with asyncio.timeout(MAP_IMAGE_TIMEOUT):
+                async with self._session.get(f"{self._base}/api/map.png") as resp:
+                    if resp.status == 404:
+                        return None
+                    if resp.status != 200:
+                        raise ProscenicApiError(f"HTTP {resp.status} from /api/map.png")
+                    return await resp.read()
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise ProscenicApiError(f"Cannot fetch map image: {err}") from err
 
     async def command(self, action: str, **payload: Any) -> None:
         """Send a command, e.g. command("clean_rooms", rooms=[1, 2])."""

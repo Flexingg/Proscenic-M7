@@ -11,6 +11,12 @@ def auto_enable_custom_integrations(enable_custom_integrations):
     yield
 
 
+# 1x1 PNG
+PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+    "0000000d4944415478da63f8ffff3f0005fe02fea7d6a2910000000049454e44ae426082"
+)
+
 STATUS = {
     "sn": "LSLDSM7PRO20403551",
     "state": "docked",
@@ -47,7 +53,7 @@ def _allow_localhost(socket_enabled):
 @pytest.fixture
 async def bridge(aiohttp_server):
     """Fake bridge; `.status`, `.commands` are inspectable/mutable."""
-    state = {"status": dict(STATUS), "commands": [], "down": False}
+    state = {"status": dict(STATUS), "commands": [], "down": False, "png": PNG}
 
     async def status(request):
         if state["down"]:
@@ -57,6 +63,11 @@ async def bridge(aiohttp_server):
     async def map_json(request):
         return web.json_response(MAP)
 
+    async def map_png(request):
+        if not state.get("png"):
+            return web.Response(status=404, text="no map yet")
+        return web.Response(body=state["png"], content_type="image/png")
+
     async def command(request):
         state["commands"].append(await request.json())
         return web.json_response({"status": "ok"})
@@ -64,6 +75,7 @@ async def bridge(aiohttp_server):
     app = web.Application()
     app.router.add_get("/api/status", status)
     app.router.add_get("/api/map.json", map_json)
+    app.router.add_get("/api/map.png", map_png)
     app.router.add_post("/api/command", command)
     server = await aiohttp_server(app)
     server.state = state
