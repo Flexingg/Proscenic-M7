@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from . import ProscenicConfigEntry
+from . import ProscenicConfigEntry, async_repoint
+from .const import CONF_MODE, MODE_DIRECT
 from .entity import ProscenicEntity
 
 # (key, app command, requires robot online)
@@ -23,10 +25,13 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up buttons."""
-    async_add_entities(
+    entities: list[ButtonEntity] = [
         ProscenicButton(entry.runtime_data, key, action, needs_online)
         for key, action, needs_online in BUTTONS
-    )
+    ]
+    if entry.data.get(CONF_MODE) == MODE_DIRECT:
+        entities.append(RepointButton(entry.runtime_data, entry))
+    async_add_entities(entities)
 
 
 class ProscenicButton(ProscenicEntity, ButtonEntity):
@@ -40,3 +45,19 @@ class ProscenicButton(ProscenicEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         await self._command(self._action)
+
+
+class RepointButton(ProscenicEntity, ButtonEntity):
+    """Direct mode: (re-)point the robot's cloud at this Home Assistant."""
+
+    _attr_translation_key = "repoint"
+    _requires_robot_online = False
+
+    def __init__(self, coordinator, entry: ProscenicConfigEntry) -> None:
+        super().__init__(coordinator, "repoint")
+        self._entry = entry
+
+    async def async_press(self) -> None:
+        ok, message = await async_repoint(self.hass, self._entry)
+        if not ok:
+            raise HomeAssistantError(message)

@@ -2,23 +2,47 @@
   "config": {
     "step": {
       "user": {
-        "title": "Proscenic M7 (local)",
+        "title": "Proscenic M7",
+        "description": "How should Home Assistant talk to the vacuum?",
+        "menu_options": {
+          "direct": "Directly (Home Assistant replaces the phone)",
+          "phone": "Through the Android app on a phone"
+        }
+      },
+      "phone": {
+        "title": "Phone app",
         "description": "Enter the IP address of the phone running the Proscenic M7 Living Flow app (its HTTP bridge listens on port 8080). Give the phone a fixed IP in your router.",
         "data": {
           "host": "Phone IP address",
           "port": "Port"
         }
       },
+      "direct": {
+        "title": "Direct connection",
+        "description": "Home Assistant will act as the robot's cloud server, so no phone is needed. The robot must already be on your Wi-Fi. Leave the robot IP empty to scan your network.",
+        "data": {
+          "advertise_ip": "This Home Assistant's IP address (the robot will connect here)",
+          "http_port": "HTTP port",
+          "gateway_port": "Robot TCP port",
+          "robot_ip": "Robot IP address (optional)",
+          "repoint": "Point my robot at Home Assistant now"
+        }
+      },
       "reconfigure": {
-        "title": "Phone address",
+        "title": "Connection",
         "data": {
           "host": "Phone IP address",
-          "port": "Port"
+          "port": "Port",
+          "advertise_ip": "This Home Assistant's IP address",
+          "robot_ip": "Robot IP address (optional)",
+          "repoint": "Point my robot at Home Assistant now"
         }
       }
     },
     "error": {
-      "cannot_connect": "Could not reach the app. Is it open, on the same network, and showing the server running?"
+      "cannot_connect": "Could not reach the app. Is it open, on the same network, and showing the server running?",
+      "same_port": "The two ports must be different",
+      "port_in_use": "One of those ports is already in use on this machine"
     },
     "abort": {
       "already_configured": "This robot is already configured",
@@ -54,6 +78,9 @@
       },
       "wake": {
         "name": "Wake"
+      },
+      "repoint": {
+        "name": "Point robot at Home Assistant"
       }
     },
     "select": {
@@ -106,6 +133,20 @@
           "description": "List of zone ids."
         }
       }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Room names",
+        "description": "The robot only numbers its rooms. Name them as comma-separated pairs, e.g. 1=Kitchen, 2=Hallway. Room numbers are listed in the vacuum's attributes.",
+        "data": {
+          "room_names": "Room names"
+        }
+      }
+    },
+    "abort": {
+      "not_supported": "Room names are set in the Android app when using the phone connection."
     }
   }
 }
