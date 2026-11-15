@@ -110,6 +110,10 @@ class LocalVacuumServer(
     @Volatile
     var latestPathSnapshot: CleanPath = CleanPath()
 
+    /** Room names from the app UI, so Home Assistant can show "Kitchen" instead of "Room 3". */
+    @Volatile
+    var latestRoomNames: Map<Int, String> = emptyMap()
+
     @Volatile
     var latestConsumables: ConsumablesStatus = ConsumablesStatus()
 
@@ -426,6 +430,13 @@ class LocalVacuumServer(
                     put("clean_time_sec", s.cleanTimeSec)
                     put("position_mm", JSONArray().put(s.posMm.xMm).put(s.posMm.yMm))
                     put("online", s.isOnline)
+                    put("sub_mode", s.subMode)
+                    put("volume", s.volume)
+                    put("led", s.ledSwitch)
+                    put("lidar_avoid", s.lidarCollisionAvoid)
+                    put("error_code", s.errorCode)
+                    put("heading_mrad", s.phiMrad)
+                    put("last_updated_ms", s.lastUpdatedEpochMs)
                 }.toString()
             }
 
@@ -443,6 +454,9 @@ class LocalVacuumServer(
                         put("x_min", m.xMin)
                         put("y_min", m.yMin)
                         put("rooms", JSONArray(m.roomLabels.toList()))
+                        put("room_names", JSONObject().apply {
+                            m.roomLabels.forEach { id -> put(id.toString(), latestRoomNames[id] ?: "Room $id") }
+                        })
                         val zonesArr = JSONArray()
                         m.areas.forEach { zonesArr.put(ProscenicProtocol.serializeRegion(it)) }
                         put("zones", zonesArr)

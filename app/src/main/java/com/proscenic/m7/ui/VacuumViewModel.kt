@@ -25,6 +25,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -328,6 +330,9 @@ class VacuumViewModel : ViewModel() {
     private fun startEmbeddedServer() {
         localServer.start()
         viewModelScope.launch {
+            _uiState.map { it.roomNames }.distinctUntilChanged().collect { localServer.latestRoomNames = it }
+        }
+        viewModelScope.launch {
             localServer.isRobotConnected.collect { connected ->
                 _uiState.update { state ->
                     state.copy(
@@ -534,6 +539,29 @@ class VacuumViewModel : ViewModel() {
             val frame = ProscenicProtocol.buildPauseContinueStop("pause")
             dispatchSingleFrame(frame, "Sent Pause Cleaning (21017 pause)")
         }
+    }
+
+    private fun isPausedMode(mode: String) =
+        mode.equals("pause", ignoreCase = true) || mode.equals("findchargerpause", ignoreCase = true)
+
+    /** Explicit pause (no-op if already paused), unlike [pauseOrResumeCleaning] which toggles. */
+    fun pauseCleaning() {
+        if (isPausedMode(_uiState.value.status.mode)) return
+        dispatchSingleFrame(ProscenicProtocol.buildPauseContinueStop("pause"), "Sent Pause Cleaning (21017 pause)")
+    }
+
+    /** Explicit resume (no-op unless paused). */
+    fun resumeCleaning() {
+        if (!isPausedMode(_uiState.value.status.mode)) return
+        dispatchSingleFrame(ProscenicProtocol.buildPauseContinueStop("continue"), "Sent Resume Cleaning (21017 continue)")
+    }
+
+    fun setLedSwitch(enabled: Boolean) {
+        dispatchSingleFrame(ProscenicProtocol.buildSetLedSwitch(enabled), "Sent LED ${if (enabled) "on" else "off"} (21024)")
+    }
+
+    fun setLidarCollisionAvoid(enabled: Boolean) {
+        dispatchSingleFrame(ProscenicProtocol.buildSetLidarCollision(enabled), "Sent Lidar collision avoid ${if (enabled) "on" else "off"} (21024)")
     }
 
     fun stopCleaning() {
@@ -1174,7 +1202,12 @@ class VacuumViewModel : ViewModel() {
             when (action.lowercase()) {
                 "start", "clean", "turn_on" -> startWholeHomeClean(deepClean = false)
                 "deep_clean" -> startWholeHomeClean(deepClean = true)
-                "pause", "play_pause" -> pauseOrResumeCleaning()
+                "pause" -> pauseCleaning()
+                "resume", "continue" -> resumeCleaning()
+                "play_pause" -> pauseOrResumeCleaning()
+                "set_volume" -> setSpeakerVolume(payload.optInt("value", payload.optInt("volume", 5)))
+                "set_led" -> setLedSwitch(payload.optBoolean("value", payload.optBoolean("enabled", true)))
+                "set_lidar_avoid" -> setLidarCollisionAvoid(payload.optBoolean("value", payload.optBoolean("enabled", true)))
                 "stop", "turn_off" -> stopCleaning()
                 "return_to_base", "dock", "charge" -> returnToDock()
                 "locate" -> locateRobotBeep()

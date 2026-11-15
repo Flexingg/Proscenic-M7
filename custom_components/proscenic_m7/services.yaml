@@ -1,0 +1,23 @@
+clean_rooms:
+  target:
+    entity:
+      integration: proscenic_m7
+      domain: vacuum
+  fields:
+    rooms:
+      required: true
+      example: '["Kitchen", "Hallway"]'
+      selector:
+        object:
+
+clean_zones:
+  target:
+    entity:
+      integration: proscenic_m7
+      domain: vacuum
+  fields:
+    zones:
+      required: true
+      example: "[1, 2]"
+      selector:
+        object:

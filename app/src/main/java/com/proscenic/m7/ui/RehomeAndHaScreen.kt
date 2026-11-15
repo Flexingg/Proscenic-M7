@@ -116,20 +116,20 @@ fun RehomeAndHaScreen(
     val haYamlSnippet = remember(serverHostIp) {
         """
         # Proscenic M7 / M7 Pro 100% Local Home Assistant Bridge
+        # (Prefer the custom integration in /custom_components/proscenic_m7 — see docs/HOME_ASSISTANT.md)
         rest:
           - resource: http://$serverHostIp:8080/api/status
             scan_interval: 5
             sensor:
               - name: "Proscenic M7 Status"
-                value_template: "{{ value_json.modeDisplay }}"
+                value_template: "{{ value_json.state }}"
                 json_attributes:
-                  - battery
-                  - suction
-                  - cleanAreaM2
-                  - cleanTimeSec
-                  - posXMm
-                  - posYMm
-                  - connected
+                  - battery_level
+                  - fan_speed
+                  - clean_area_m2
+                  - clean_time_sec
+                  - position_mm
+                  - online
 
         rest_command:
           proscenic_m7_start:
