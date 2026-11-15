@@ -1,16 +1,21 @@
 # Home Assistant integration
 
 `custom_components/proscenic_m7` gives Home Assistant full local control of the
-vacuum. It does not talk to the robot directly: the robot talks to the Android
-app (which acts as its replacement cloud server), and the integration talks to
-the app's HTTP bridge on port `8080`.
+vacuum. The robot has no local API of its own: it phones home to a "cloud" server, and
+this project provides that server. It can run either on your phone (the Android app) or
+inside Home Assistant itself.
 
 ```
-Robot ──TCP :8081──▶ Android app ◀──HTTP :8080/api/*── Home Assistant
+Phone mode:   Robot ──TCP :8081──▶ Android app ◀──HTTP :8080/api/*── Home Assistant
+Direct mode:  Robot ──TCP :8081──▶ Home Assistant   (no phone involved)
 ```
 
-So the phone must stay on, on your Wi-Fi, with the app running. Give it a fixed
-IP (DHCP reservation) in your router.
+There are two ways to connect, picked when you add the integration:
+
+* **Directly (recommended once it works for you):** Home Assistant itself acts as the
+  robot's cloud server. No phone, no app running. See [Direct mode](#direct-mode-no-phone).
+* **Through the phone app:** the phone must stay on, on your Wi-Fi, with the app running.
+  Give it a fixed IP (DHCP reservation) in your router.
 
 ## Install
 
@@ -21,12 +26,56 @@ restart Home Assistant.
 **Manual:** copy `custom_components/proscenic_m7` into your HA config directory's
 `custom_components/` folder and restart.
 
-Then: Settings → Devices & services → Add integration → *Proscenic M7* → enter
-the phone's IP (port `8080`). Needs Home Assistant 2025.1 or newer. You need the
+Then: Settings → Devices & services → Add integration → *Proscenic M7* and choose a
+connection. For the phone: enter the phone's IP (port `8080`). Needs Home Assistant
+2025.1 or newer. You need the
 app build that includes the extended `/api` (release 0.0.6 or newer): older builds
 lack pause/resume, volume, LED, room names and the map image.
 
 If the phone's IP changes: open the integration → ⋮ → Reconfigure.
+
+(The phone-app note above applies to *phone mode* only; direct mode does not need the app.)
+
+## Direct mode (no phone)
+
+In direct mode the integration runs the same two servers the phone app runs (HTTP
+`:8080`, robot TCP `:8081`) inside Home Assistant, and tells the robot to connect to
+them. The robot has only one "cloud", so **while it points at Home Assistant the phone
+app cannot control it, and the reverse.** Switching back is one tap in the app
+(Pairing & HA → Scan & Re-Point Robot).
+
+**Requirements**
+
+* The robot is already on your home Wi-Fi (paired once, e.g. with the app).
+* Home Assistant can reach the robot on the LAN and can listen on two TCP ports.
+  Home Assistant OS and Container with `network_mode: host` work. A Docker *bridge*
+  network does not (the robot could not find or reach it).
+* Ports `8080` and `8081` are free on the Home Assistant host (both configurable).
+
+**Set up**
+
+1. Add integration → *Proscenic M7* → **Directly**.
+2. Check the Home Assistant IP shown (the robot will connect to it; give it a fixed
+   address), leave *Robot IP* empty to scan your network, and keep
+   *Point my robot at Home Assistant now* ticked.
+3. Within a minute the *Robot connected* sensor turns on and entities come alive.
+   If re-pointing failed you get a notification with the reason; fix it and press
+   **Point robot at Home Assistant** on the device page.
+
+**Notes**
+
+* Re-pointing uses the robot's LAN control port (UDP 7913), the same steps as the app's
+  re-point: `setUrl` (HTTP) → `setUrl` (gateway) → `setID`. It never sends `bindOk`.
+* Commands are **never queued** while the robot is offline: they fail with an error
+  rather than running later, when you no longer expect them.
+* The robot only numbers its rooms. Name them under *Configure* on the integration,
+  e.g. `1=Kitchen, 2=Hallway` (numbers are in the vacuum's `rooms` attribute), then
+  use the names in `proscenic_m7.clean_rooms`.
+* Home Assistant renders the map itself (rooms, zones, no-go areas, path, dock, robot).
+* If Home Assistant is off, the robot has no cloud and goes offline until it is back.
+* Not yet verified on real hardware. The protocol code is a port of the Android app's
+  and is covered by tests against a simulated robot; if something misbehaves, enable
+  debug logging for `custom_components.proscenic_m7` and open an issue.
 
 ## What you get
 
@@ -37,6 +86,7 @@ If the phone's IP changes: open the integration → ⋮ → Reconfigure.
 | `sensor` mode, error code | Diagnostics |
 | `binary_sensor` robot connected, charging, problem | Robot connected stays available when the robot drops off; all other robot entities go unavailable |
 | `button` deep clean (2×), empty dust bin, wake | One-shot actions. *Wake* works even when the robot looks asleep |
+| `button` point robot at Home Assistant | Direct mode only: (re-)point the robot's cloud at this Home Assistant |
 | `camera` map | The floor map as an image: rooms, zones, cleaning path, dock and robot |
 | `select` suction | Same as vacuum fan speed |
 | `number` volume (0–10) | Voice prompt volume |

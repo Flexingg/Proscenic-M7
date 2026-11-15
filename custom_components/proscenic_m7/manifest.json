@@ -1,12 +1,17 @@
 {
   "domain": "proscenic_m7",
   "name": "Proscenic M7 / M7 Pro (Local)",
-  "codeowners": ["@Flexingg"],
+  "codeowners": [
+    "@Flexingg"
+  ],
   "config_flow": true,
   "documentation": "https://github.com/Flexingg/Proscenic-M7/blob/main/docs/HOME_ASSISTANT.md",
   "integration_type": "device",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/Flexingg/Proscenic-M7/issues",
   "requirements": [],
-  "version": "0.1.0"
+  "version": "0.2.0",
+  "dependencies": [
+    "network"
+  ]
 }

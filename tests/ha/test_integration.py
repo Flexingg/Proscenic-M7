@@ -28,6 +28,8 @@ async def setup(hass: HomeAssistant, bridge) -> MockConfigEntry:
 
 async def test_config_flow(hass: HomeAssistant, bridge):
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    assert result["type"] == "menu"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "phone"})
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {"host": bridge.host, "port": bridge.port}
     )
@@ -38,6 +40,8 @@ async def test_config_flow(hass: HomeAssistant, bridge):
 async def test_config_flow_cannot_connect(hass: HomeAssistant, bridge):
     bridge.state["down"] = True
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    assert result["type"] == "menu"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "phone"})
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {"host": bridge.host, "port": bridge.port}
     )
