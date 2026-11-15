@@ -1,0 +1,98 @@
+blueprint:
+  name: Proscenic M7 - Scheduled clean
+  description: >
+    Replaces the app's built-in schedules. Cleans at a set time on chosen weekdays,
+    either the whole home or specific rooms, optionally skipping when someone is home.
+  domain: automation
+  source_url: https://github.com/Flexingg/Proscenic-M7/blob/main/blueprints/automation/proscenic_m7/scheduled_clean.yaml
+  homeassistant:
+    min_version: 2024.10.0
+  input:
+    vacuum:
+      name: Vacuum
+      selector:
+        entity:
+          domain: vacuum
+          integration: proscenic_m7
+    time:
+      name: Start time
+      selector:
+        time:
+    weekdays:
+      name: Days
+      default: [mon, tue, wed, thu, fri, sat, sun]
+      selector:
+        select:
+          multiple: true
+          mode: list
+          options:
+            - { label: Monday, value: mon }
+            - { label: Tuesday, value: tue }
+            - { label: Wednesday, value: wed }
+            - { label: Thursday, value: thu }
+            - { label: Friday, value: fri }
+            - { label: Saturday, value: sat }
+            - { label: Sunday, value: sun }
+    rooms:
+      name: Rooms
+      description: Room names or ids to clean. Leave empty to clean the whole home.
+      default: []
+      selector:
+        object:
+    suction:
+      name: Suction
+      description: Suction power for this run.
+      default: auto
+      selector:
+        select:
+          options: [quiet, auto, strong, max]
+    skip_if_home:
+      name: Skip if home (optional)
+      description: >
+        A person or group entity. If it is "home" at the start time, the clean is skipped.
+      default: []
+      selector:
+        entity:
+          multiple: true
+          domain: [person, group, binary_sensor]
+
+mode: single
+
+variables:
+  vacuum: !input vacuum
+  rooms: !input rooms
+  suction: !input suction
+  skip_if_home: !input skip_if_home
+
+triggers:
+  - trigger: time
+    at: !input time
+
+conditions:
+  - condition: time
+    weekday: !input weekdays
+  - condition: template
+    value_template: >
+      {{ skip_if_home | select('is_state', 'home') | list | count == 0
+         and skip_if_home | select('is_state', 'on') | list | count == 0 }}
+
+actions:
+  - action: vacuum.set_fan_speed
+    target:
+      entity_id: !input vacuum
+    data:
+      fan_speed: "{{ suction }}"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ rooms | count > 0 }}"
+        sequence:
+          - action: proscenic_m7.clean_rooms
+            target:
+              entity_id: !input vacuum
+            data:
+              rooms: "{{ rooms }}"
+    default:
+      - action: vacuum.start
+        target:
+          entity_id: !input vacuum

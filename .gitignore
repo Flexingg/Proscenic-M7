@@ -19,3 +19,6 @@ keystore.properties
 
 # Kotlin incremental-compile state (created by the Gradle Kotlin plugin)
 .kotlin/
+
+__pycache__/
+.pytest_cache/

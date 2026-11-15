@@ -1,0 +1,111 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Proscenic M7 (local)",
+        "description": "Enter the IP address of the phone running the Proscenic M7 Living Flow app (its HTTP bridge listens on port 8080). Give the phone a fixed IP in your router.",
+        "data": {
+          "host": "Phone IP address",
+          "port": "Port"
+        }
+      },
+      "reconfigure": {
+        "title": "Phone address",
+        "data": {
+          "host": "Phone IP address",
+          "port": "Port"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the app. Is it open, on the same network, and showing the server running?"
+    },
+    "abort": {
+      "already_configured": "This robot is already configured",
+      "reconfigure_successful": "Address updated"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "clean_area": {
+        "name": "Cleaned area"
+      },
+      "clean_time": {
+        "name": "Cleaning time"
+      },
+      "mode": {
+        "name": "Mode"
+      },
+      "error_code": {
+        "name": "Error code"
+      }
+    },
+    "binary_sensor": {
+      "robot_connected": {
+        "name": "Robot connected"
+      }
+    },
+    "button": {
+      "deep_clean": {
+        "name": "Deep clean"
+      },
+      "empty_bin": {
+        "name": "Empty dust bin"
+      },
+      "wake": {
+        "name": "Wake"
+      }
+    },
+    "select": {
+      "suction": {
+        "name": "Suction",
+        "state": {
+          "quiet": "Quiet",
+          "auto": "Standard",
+          "strong": "Strong",
+          "max": "Max"
+        }
+      }
+    },
+    "number": {
+      "volume": {
+        "name": "Volume"
+      }
+    },
+    "switch": {
+      "led": {
+        "name": "LED"
+      },
+      "lidar_avoid": {
+        "name": "Lidar collision avoidance"
+      }
+    },
+    "camera": {
+      "map": {
+        "name": "Map"
+      }
+    }
+  },
+  "services": {
+    "clean_rooms": {
+      "name": "Clean rooms",
+      "description": "Clean one or more rooms, by name (as shown in the app) or id.",
+      "fields": {
+        "rooms": {
+          "name": "Rooms",
+          "description": "List of room names or ids."
+        }
+      }
+    },
+    "clean_zones": {
+      "name": "Clean zones",
+      "description": "Clean one or more saved cleaning zones by id.",
+      "fields": {
+        "zones": {
+          "name": "Zones",
+          "description": "List of zone ids."
+        }
+      }
+    }
+  }
+}
